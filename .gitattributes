@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+# Test inputs must keep their exact bytes (CRLF, BOM, invalid UTF-8, ...)
+test/fixtures/** -text
+test/data/** -text
+test/valid/** -text
+test/invalid/** -text

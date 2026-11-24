@@ -144,7 +144,7 @@ def collect_files(paths: list[str], exclude: list[str]) -> list[str]:
                     for pat in exclude
                 ):
                     continue
-                out.append(str(f))
+                out.append(f.as_posix())
         else:
             out.append(p)
     seen: set[str] = set()

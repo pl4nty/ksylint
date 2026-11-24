@@ -1,0 +1,14 @@
+- id: ksylint
+  name: ksylint
+  description: Lint Kaitai Struct .ksy files against the KSY style guide.
+  entry: ksylint
+  language: python
+  files: \.ksy$
+  require_serial: false
+
+- id: ksylint-fix
+  name: ksylint (fix)
+  description: Apply ksylint's safe autofixes to .ksy files, then lint them.
+  entry: ksylint --fix
+  language: python
+  files: \.ksy$
