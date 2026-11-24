@@ -253,3 +253,28 @@ def test_one_space_after_dash_for_every_kind_of_item():
         "      indicator\n"
     )
     assert not [d for d in ksylint.lint_text(res.text, "x.ksy") if d.fixable]
+
+
+def test_trailing_deeper_comment_moves_with_the_last_entry():
+    # Left in place, the comment would become part of the block scalar.
+    text = HEAD + (
+        "seq:\n"
+        "  - doc: |\n"
+        "      Text.\n"
+        "    id: a\n"
+        "    type: u2\n"
+        "      # valid: 0\n"
+        "  - id: b\n"
+        "    type: u2\n"
+    )
+    res = ksylint.fix_text(text, "x.ksy")
+    assert not res.skipped and res.text == HEAD + (
+        "seq:\n"
+        "  - id: a\n"
+        "    type: u2\n"
+        "      # valid: 0\n"
+        "    doc: |\n"
+        "      Text.\n"
+        "  - id: b\n"
+        "    type: u2\n"
+    )

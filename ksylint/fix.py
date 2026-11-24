@@ -274,19 +274,23 @@ def _blocks(doc: YamlDocument, anchors: list[_Span], protected: set[int]) -> Opt
     line before the next entry. Returns (start, end) per entry.
 
     A comment that is indented deeper than the entry below it is taken to
-    belong to the entry above it (typically commented-out nested content).
+    belong to the entry above it (typically commented-out nested content);
+    this includes such comments directly below the last entry, which would
+    otherwise become part of a block scalar that is moved in front of them.
     """
     lines = doc.lines
+
+    def comment(i: int, entry: _Span, *, deeper: bool) -> bool:
+        return _is_comment(lines, i, protected) and (
+            (indent(lines[i]) > indent(lines[entry[0]])) == deeper
+        )
+
     out = []
     prev_end = -1
     for i, (a, b) in enumerate(anchors):
         start = a
         if i > 0:
-            while (
-                start - 1 > prev_end
-                and _is_comment(lines, start - 1, protected)
-                and indent(lines[start - 1]) <= indent(lines[a])
-            ):
+            while start - 1 > prev_end and comment(start - 1, (a, b), deeper=False):
                 start -= 1
         out.append([start, b])
         prev_end = b
@@ -297,6 +301,8 @@ def _blocks(doc: YamlDocument, anchors: list[_Span], protected: set[int]) -> Opt
         while e > cur[1] and not lines[e].strip():
             e -= 1
         cur[1] = e
+    while out[-1][1] + 1 < len(lines) and comment(out[-1][1] + 1, anchors[-1], deeper=True):
+        out[-1][1] += 1
     return [(a, b) for a, b in out]
 
 
