@@ -5,6 +5,9 @@ from __future__ import annotations
 from ..linter import LintContext
 from ..registry import rule
 
+#: ksc warnings that a native rule already reports (KSY101).
+_NATIVE = ("use canonical encoding name",)
+
 
 def _report(ctx: LintContext, kind: str) -> None:
     result = ctx.external.get("ksc")
@@ -19,9 +22,13 @@ def _report(ctx: LintContext, kind: str) -> None:
             p.pop()
             node = ctx.doc.find(p) if ctx.root is not None else None
         msg = item.get("message", "").strip()
+        if kind == "warnings" and any(msg.startswith(p) for p in _NATIVE):
+            continue  # covered by a native rule with autofix
         f = item.get("file")
         if f and ctx.filename and not _same_file(f, ctx.filename):
-            msg = f"{f}: {msg}"
+            if kind == "warnings":
+                continue  # reported when the imported file itself is linted
+            msg = f"in imported file {f}: {msg}"
             node = None
         ptr = "/" + "/".join(path) if path else ""
         if node is not None:
