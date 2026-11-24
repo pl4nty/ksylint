@@ -218,3 +218,38 @@ def test_flow_style_xref_and_tags_are_not_reported_fixable():
     diags = [d for d in ksylint.lint_text(text, "x.ksy") if d.rule_id in ("KSY207", "KSY208")]
     assert len(diags) == 2 and not any(d.fixable for d in diags)
     assert not ksylint.fix_text(text, "x.ksy").changed
+
+
+def test_one_space_after_dash_for_every_kind_of_item():
+    text = HEAD + (
+        "seq:\n"
+        "  -   {id: a, type: u1}\n"
+        "  -  id: b\n"
+        "     type: u1\n"
+        "x-list:\n"
+        "  -   plain\n"
+        "  -   'quoted'\n"
+        "  -   [1,\n"
+        "       2]\n"
+        "  -   |\n"
+        "      block\n"
+        "  -   |2\n"
+        "      indicator\n"
+    )
+    res = ksylint.fix_text(text, "x.ksy")
+    assert res.text == HEAD + (
+        "seq:\n"
+        "  - {id: a, type: u1}\n"
+        "  - id: b\n"
+        "    type: u1\n"
+        "x-list:\n"
+        "  - plain\n"
+        "  - 'quoted'\n"
+        "  - [1,\n"
+        "       2]\n"
+        "  - |\n"
+        "      block\n"
+        "  - |2\n"
+        "      indicator\n"
+    )
+    assert not [d for d in ksylint.lint_text(res.text, "x.ksy") if d.fixable]

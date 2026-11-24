@@ -202,13 +202,8 @@ def _fix_indentation(text: str, _active: set[str]) -> Optional[_Edit]:
                 fix_map(item, dexp + 2, True)
             elif item.kind == SEQ and not item.flow and item.items:
                 raise _Abort("nested block sequence")
-            elif (
-                same
-                and item.start.col != dcol + 2
-                and item.kind == SCALAR
-                and item.style not in ("|", ">")
-            ):
-                rewrite[dline] = (dexp, item.start.col)
+            elif same and item.start.col != dcol + 2:
+                rewrite[dline] = (dexp, item.start.col)  # scalar or flow collection
 
     try:
         if root.start.col != 0 and not doc.line_starts_at(root.start):
