@@ -205,6 +205,7 @@ def xref_order(ctx: LintContext) -> None:
                 f"xref keys must be sorted: `{keys[i]}` should come before `{keys[i - 1]}`",
                 n.items[i][0],
                 path=n.ptr,
+                fixable=not n.flow,
             )
             return
 

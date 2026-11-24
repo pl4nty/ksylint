@@ -209,3 +209,12 @@ def test_deeper_comment_stays_with_the_entry_above_it():
         "        type: u1\n"
         "      # - id: b (a comment that belongs to `seq`)\n"
     )
+
+
+def test_flow_style_xref_and_tags_are_not_reported_fixable():
+    text = HEAD.replace(
+        "  license", "  xref: {wikidata: Q1, justsolve: X}\n  tags: [b, a]\n  license"
+    )
+    diags = [d for d in ksylint.lint_text(text, "x.ksy") if d.rule_id in ("KSY207", "KSY208")]
+    assert len(diags) == 2 and not any(d.fixable for d in diags)
+    assert not ksylint.fix_text(text, "x.ksy").changed
