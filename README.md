@@ -94,9 +94,10 @@ re-parsed and the loaded data is compared with the data before the step; a
 step that would change anything else is discarded. Fixing is idempotent.
 
 Only enabled rules are fixed: a rule that is ignored, or disabled with a
-`# ksylint: disable-file` comment, is left alone (the three indentation rules
-`KSY007`–`KSY009` are fixed together or not at all). Line-level `disable`
-comments only silence the diagnostic.
+`# ksylint: disable-file` comment, is left alone. The indentation rules
+`KSY007`–`KSY009` are fixed in one pass, which is skipped if it would also
+"fix" one of them that is disabled. Line-level `disable` comments only silence
+the diagnostic.
 
 ## Configuration
 

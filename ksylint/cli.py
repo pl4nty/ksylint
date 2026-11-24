@@ -186,7 +186,9 @@ def _fix(args: argparse.Namespace, cfg: Config, sources: dict[str, Union[str, by
             )
             continue
         if f == "-":
-            sys.stdout.write(res.text)
+            # exact bytes: UTF-8 and no newline translation, as for files
+            sys.stdout.flush()
+            sys.stdout.buffer.write(res.text.encode("utf-8"))
         elif res.changed:
             with open(f, "w", encoding="utf-8", newline="") as fh:
                 fh.write(res.text)

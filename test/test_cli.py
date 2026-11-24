@@ -10,13 +10,17 @@ GOOD = "meta:\n  id: good\n  title: Good\n  license: CC0-1.0\nseq:\n  - id: one\
 BAD = "meta:\n  id: bad\n  title: Bad\n  license: CC0-1.0\nseq:\n  - id: one\n    type: str\n    size: 1\n    encoding: ascii\n"
 
 
+def _write(path, text):
+    path.write_bytes(text.encode())  # not write_text: no CRLF translation on Windows
+
+
 @pytest.fixture
 def files(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "good.ksy").write_text(GOOD)
+    _write(tmp_path / "good.ksy", GOOD)
     sub = tmp_path / "sub"
     sub.mkdir()
-    (sub / "bad.ksy").write_text(BAD)
+    _write(sub / "bad.ksy", BAD)
     return tmp_path
 
 
@@ -40,8 +44,9 @@ def test_select_ignore(files, capsys):
 
 
 def test_fail_on(files):
-    (files / "sub" / "bad.ksy").write_text(
-        GOOD.replace("good", "bad").replace("seq:", "doc: 'quoted'\nseq:")
+    _write(
+        files / "sub" / "bad.ksy",
+        GOOD.replace("good", "bad").replace("seq:", "doc: 'quoted'\nseq:"),
     )
     assert main(["."]) == 1  # warning fails by default
     assert main([".", "--fail-on", "error"]) == 0
@@ -65,16 +70,16 @@ def test_json_and_github_and_sarif(files, capsys):
 
 
 def test_diff_does_not_write(files, capsys):
-    before = (files / "sub" / "bad.ksy").read_text()
+    before = (files / "sub" / "bad.ksy").read_bytes()
     assert main([".", "--diff"]) == 1
     out = capsys.readouterr().out
     assert "+    encoding: ASCII" in out and out.startswith("--- a/")
-    assert (files / "sub" / "bad.ksy").read_text() == before
+    assert (files / "sub" / "bad.ksy").read_bytes() == before
 
 
 def test_fix_writes(files, capsys):
     assert main([".", "--fix"]) == 0
-    text = (files / "sub" / "bad.ksy").read_text()
+    text = (files / "sub" / "bad.ksy").read_bytes().decode()
     assert "encoding: ASCII" in text and "size: 1\n    type: str" in text
     assert main([".", "--diff"]) == 0
 
@@ -167,7 +172,7 @@ def test_quiet_and_statistics(files, capsys):
 def test_sarif_locations_are_uri_references(files, capsys):
     odd = files / "a dir"
     odd.mkdir()
-    (odd / "bäd.ksy").write_text(BAD)
+    _write(odd / "bäd.ksy", BAD)
     main(["a dir", str(odd), "--format", "sarif"])
     run = json.loads(capsys.readouterr().out)["runs"][0]
     uris = {
@@ -202,9 +207,7 @@ def test_compile_mode(files, capsys, tmp_path):
         ksc = os.environ.get("KSC")
     if not ksc:
         pytest.skip("kaitai-struct-compiler not available")
-    (files / "broken.ksy").write_text(
-        GOOD.replace("good", "broken").replace("type: u1", "type: u1x")
-    )
+    _write(files / "broken.ksy", GOOD.replace("good", "broken").replace("type: u1", "type: u1x"))
     assert main(["broken.ksy", "--compile", "--ksc", ksc, "--select", "KSY9"]) == 1
     out = capsys.readouterr().out
     assert "broken.ksy:7:11: error [KSY900 ksc-error]" in out
