@@ -72,6 +72,8 @@ class Node:
     * For sequences, ``items`` is a list of nodes.
     * For scalars, ``value`` is the constructed Python value and ``raw`` the
       scalar text.
+    * An alias (``*name``) is a scalar with style ``*`` whose ``value`` is
+      the anchored data, whatever its kind.
     """
 
     __slots__ = ("end", "flow", "items", "kind", "path", "ptr", "raw", "start", "style", "value")
@@ -237,6 +239,7 @@ class YamlDocument:
             # A leaf at the alias's position whose value is the anchored data.
             node = Node(SCALAR, self.pos(raw.start_mark.index), self.pos(raw.end_mark.index))
             node.path, node.ptr = path, ptr
+            node.style = "*"
             node.raw = self.text[node.start.index : node.end.index]
             if id(raw.target) in self._building:
                 node.value = None  # recursive alias

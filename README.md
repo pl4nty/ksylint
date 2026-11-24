@@ -85,7 +85,12 @@ Exit status: `0` no problems (at or above `--fail-on`), `1` problems found
 - key order of spec objects (`KSY300`–`KSY306`), `xref` key order and `tags`
   order;
 - non-canonical encoding names (`ascii` → `ASCII`, `utf8` → `UTF-8`,
-  `cp437` → `IBM437`, ...).
+  `cp437` → `IBM437`, ...);
+- doc strings (`KSY400`–`KSY402`): one-line `|` blocks and needlessly quoted
+  docs become plain scalars, folded (`>`) and multi-line plain docs become
+  `|` literal blocks, and overlong prose lines are wrapped (list items with
+  a hanging indent; code, tables, headings and lines with an unbreakable
+  token such as a long URL are left alone).
 
 Fixes are surgical, line-based edits computed from YAML node positions:
 comments travel with the keys they precede, and quoting, flow collections,
@@ -93,11 +98,18 @@ alignment and blank lines are left alone. After every step the file is
 re-parsed and the loaded data is compared with the data before the step; a
 step that would change anything else is discarded. Fixing is idempotent.
 
+The doc fixes are the only ones that change the text of a value, each in one
+verified way: `KSY400` only drops the trailing newline of a one-line block,
+`KSY401` only turns folded line breaks into literal ones (folding the new
+text as YAML would gives back the old one), and `KSY402` only inserts line
+breaks (the words and the paragraphs are unchanged).
+
 Only enabled rules are fixed: a rule that is ignored, or disabled with a
 `# ksylint: disable-file` comment, is left alone. The indentation rules
 `KSY007`–`KSY009` are fixed in one pass, which is skipped if it would also
 "fix" one of them that is disabled. Line-level `disable` comments only silence
-the diagnostic.
+the diagnostic, except that a doc whose `KSY4xx` diagnostic is silenced is not
+reformatted.
 
 ## Configuration
 
@@ -198,9 +210,9 @@ fixed by `--fix`.
 
 | ID | Name | Severity | Fix | Description |
 |----|------|----------|:---:|-------------|
-| `KSY400` | `doc-single-line` | warning |  | Single-line docs should be plain unquoted scalars. ([style guide](https://doc.kaitai.io/ksy_style_guide.html#doc)) |
-| `KSY401` | `doc-multi-line` | warning |  | Multi-line docs should use the literal block style (`doc: \|`). ([style guide](https://doc.kaitai.io/ksy_style_guide.html#doc)) |
-| `KSY402` | `doc-line-length` | warning |  | Wrap doc lines at 80 columns. ([style guide](https://doc.kaitai.io/ksy_style_guide.html#doc)) Options: `max-length` (default `80`). |
+| `KSY400` | `doc-single-line` | warning | yes | Single-line docs should be plain unquoted scalars. ([style guide](https://doc.kaitai.io/ksy_style_guide.html#doc)) |
+| `KSY401` | `doc-multi-line` | warning | yes | Multi-line docs should use the literal block style (`doc: \|`). ([style guide](https://doc.kaitai.io/ksy_style_guide.html#doc)) |
+| `KSY402` | `doc-line-length` | warning | yes | Wrap doc lines at 80 columns. ([style guide](https://doc.kaitai.io/ksy_style_guide.html#doc)) Options: `max-length` (default `80`). |
 | `KSY403` | `insecure-url` | warning |  | Prefer `https://` URLs in doc-ref and xref. ([style guide](https://doc.kaitai.io/ksy_style_guide.html#doc-ref)) |
 | `KSY404` | `malformed-url` | warning |  | URLs in doc-ref and xref must be well-formed (`URL description`). ([style guide](https://doc.kaitai.io/ksy_style_guide.html#doc-ref)) |
 | `KSY405` | `trivial-doc` | info |  | `doc` should not just repeat the attribute id. ([style guide](https://doc.kaitai.io/ksy_style_guide.html#seq-attr)) |

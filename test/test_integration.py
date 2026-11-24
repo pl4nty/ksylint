@@ -24,10 +24,10 @@ def test_real_formats_parse_and_validate(path):
 def test_cli_fix_over_copy(tmp_path, capsys):
     work = tmp_path / "formats"
     shutil.copytree(FORMATS, work)
-    assert main([str(work), "--fix", "--select", "KSY0,KSY1,KSY2,KSY3", "-q"]) in (0, 1)
+    assert main([str(work), "--fix", "--select", "KSY0,KSY1,KSY2,KSY3,KSY4", "-q"]) in (0, 1)
     capsys.readouterr()
     # after fixing, nothing fixable is left and a second run changes nothing
-    assert main([str(work), "--diff", "--select", "KSY0,KSY1,KSY2,KSY3"]) == 0
+    assert main([str(work), "--diff", "--select", "KSY0,KSY1,KSY2,KSY3,KSY4"]) == 0
     assert capsys.readouterr().out == ""
     diags = []
     for p in sorted(work.glob("*.ksy")):

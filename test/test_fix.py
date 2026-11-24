@@ -40,7 +40,8 @@ def test_fix_idempotent_and_semantics_preserving(path):
 
 
 def _normalise(data):
-    """Undo the two intended data changes: sorted tags, canonical encodings."""
+    """Undo the intended data changes: sorted tags, canonical encodings and
+    reformatted docs (only whitespace may differ)."""
     from ksylint.encodings import canonical_encoding
 
     def walk(o):
@@ -49,6 +50,8 @@ def _normalise(data):
             for k, v in o.items():
                 if k == "encoding" and isinstance(v, str):
                     v = canonical_encoding(v) or v
+                if k == "doc" and isinstance(v, str):
+                    v = " ".join(v.split())
                 if k == "tags" and isinstance(v, list):
                     v = sorted(v, key=str)
                 out[k] = walk(v)
@@ -267,7 +270,7 @@ def test_trailing_deeper_comment_moves_with_the_last_entry():
         "  - id: b\n"
         "    type: u2\n"
     )
-    res = ksylint.fix_text(text, "x.ksy")
+    res = ksylint.fix_text(text, "x.ksy", config=ksylint.Config(ignore=["KSY400"]))
     assert not res.skipped and res.text == HEAD + (
         "seq:\n"
         "  - id: a\n"
@@ -278,3 +281,108 @@ def test_trailing_deeper_comment_moves_with_the_last_entry():
         "  - id: b\n"
         "    type: u2\n"
     )
+
+
+def _docs(data, out=None):
+    """{path: doc string} of all docs in loaded data."""
+    out = {} if out is None else out
+
+    def walk(o, path):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k == "doc" and isinstance(v, str):
+                    out[(*path, k)] = v
+                else:
+                    walk(v, (*path, k))
+        elif isinstance(o, list):
+            for i, v in enumerate(o):
+                walk(v, (*path, i))
+
+    walk(data, ())
+    return out
+
+
+DOC_INPUTS = [FIX_FIXTURES / "docs.ksy", *sorted(FORMATS.glob("*.ksy"))]
+
+
+@pytest.mark.parametrize("path", DOC_INPUTS, ids=lambda p: p.stem)
+@pytest.mark.parametrize("rule_id", ["KSY400", "KSY401", "KSY402"])
+def test_doc_fix_changes_only_what_it_may(path, rule_id):
+    from ksylint.rules.docs import same_prose
+
+    text = path.read_text(encoding="utf-8")
+    res = ksylint.fix_text(text, path.name, config=ksylint.Config(select=[rule_id]))
+    before, after = yaml.safe_load(text), yaml.safe_load(res.text)
+    old, new = _docs(before), _docs(after)
+    assert old.keys() == new.keys()
+    for k in old:
+        if old[k] == new[k]:
+            continue
+        if rule_id == "KSY400":
+            assert old[k] == new[k] + "\n"
+        elif rule_id == "KSY402":
+            assert same_prose(old[k], new[k])
+            assert old[k].count("\n") < new[k].count("\n")
+        else:
+            assert " ".join(old[k].split()) == " ".join(new[k].split())
+    # Nothing but docs changes.
+    assert _normalise(before) == _normalise(after)
+
+
+def test_doc_fix_is_suppressed_by_a_disable_comment():
+    text = HEAD + 'doc: "Quoted"  # ksylint: disable=KSY400\n'
+    assert not ksylint.fix_text(text, "x.ksy").changed
+
+
+def test_folded_doc_with_more_indented_lines_keeps_its_breaks():
+    text = HEAD + "doc: >\n  Spec:\n    A more indented line\n  joined\n  lines\n"
+    res = ksylint.fix_text(text, "x.ksy")
+    assert res.text == HEAD + "doc: |\n  Spec:\n    A more indented line\n  joined\n  lines\n"
+
+
+def test_plain_multi_line_doc_is_dedented():
+    # Plain scalars fold away the indentation of continuation lines.
+    text = HEAD + "seq:\n  - id: a\n    doc: one\n      two\n        three\n"
+    res = ksylint.fix_text(text, "x.ksy", config=ksylint.Config(select=["KSY401"]))
+    assert res.text == HEAD + "seq:\n  - id: a\n    doc: |\n      one\n      two\n      three\n"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "    indented code " + "x " * 40,
+        "| a | b | " + "cell " * 20,
+        "# heading " + "word " * 20,
+        "see https://example.com/" + "x" * 80 + " for details",
+        "aligned   columns " + "word " * 20,
+        "\ttab " + "word " * 20,
+    ],
+)
+def test_structure_is_never_wrapped(line):
+    from ksylint.rules.docs import wrap_plan
+
+    assert wrap_plan([line], 80) == [None]
+
+
+def test_fenced_code_is_never_wrapped():
+    from ksylint.rules.docs import wrap_plan
+
+    long = "word " * 20
+    plan = wrap_plan(["```", long, "```", long], 80)
+    assert plan[:3] == [None, None, None] and plan[3] is not None
+
+
+def test_wrap_backs_off_before_a_token_that_cannot_start_a_line():
+    from ksylint.rules.docs import _wrap
+
+    line = "The cookie's most significant bits store the number of containers stored minus 1."
+    assert _wrap(line, 80, 0) == [
+        "The cookie's most significant bits store the number of containers stored",
+        "minus 1.",
+    ]
+
+
+def test_aliased_doc_is_left_alone():
+    text = HEAD + "doc: &d >\n  Folded\n  text.\nseq:\n  - id: a\n    type: u1\n    doc: *d\n"
+    diags = ksylint.lint_text(text, "x.ksy", config=ksylint.Config(select=["KSY4"]))
+    assert [d.line for d in diags] == [5]

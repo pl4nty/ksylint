@@ -183,6 +183,12 @@ def duplicate_key(ctx: LintContext) -> None:
 # indentation
 
 
+def is_empty(node: Node) -> bool:
+    """An empty (null) plain scalar, e.g. a bare `-` item: it has no text
+    that could be separated from the `-`."""
+    return node.kind == SCALAR and node.style is None and node.raw == ""
+
+
 def _report_indentation(ctx: LintContext, rule_id: str) -> None:
     if "indentation" not in ctx.cache:
         ctx.cache["indentation"] = indentation_issues(ctx.doc)
@@ -306,7 +312,7 @@ def _check(doc: YamlDocument, node: Node, out: list) -> None:
                     )
                 elif item.start.col != dcol + 2:
                     out.append(("KSY007", "use exactly one space after `-`", Pos(dline, dcol + 1)))
-            elif same and item.start.col != dcol + 2 and item.kind != SEQ:
+            elif same and item.start.col != dcol + 2 and item.kind != SEQ and not is_empty(item):
                 out.append(("KSY007", "use exactly one space after `-`", Pos(dline, dcol + 1)))
             _check(doc, item, out)
 

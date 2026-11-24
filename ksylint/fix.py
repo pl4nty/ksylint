@@ -29,7 +29,9 @@ import yaml
 from . import specs
 from .config import Config
 from .linter import decode, suppressed, suppressions
-from .rules.layout import DIRECTIVE, START, document_markers, indentation_issues
+from .registry import get_rule
+from .rules.docs import doc_fixes, max_length
+from .rules.layout import DIRECTIVE, START, document_markers, indentation_issues, is_empty
 from .rules.order import sorted_positions
 from .rules.schema import encoding_fixes
 from .yamldoc import MAP, SCALAR, SEQ, Node, YamlDocument, indent
@@ -71,11 +73,11 @@ class _Edit:
 # text-level fixes
 
 
-def _fix_line_endings(text: str, _active: set[str]) -> _Edit:
+def _fix_line_endings(text: str, _active: set[str], _cfg: Config) -> _Edit:
     return _Edit(text.replace("\r\n", "\n").replace("\r", "\n"), {"KSY002"})
 
 
-def _fix_doc_markers(text: str, _active: set[str]) -> _Edit:
+def _fix_doc_markers(text: str, _active: set[str], _cfg: Config) -> _Edit:
     lines = text.split("\n")
     keep: list[Optional[str]] = list(lines)
     for i, kind in document_markers([ln.rstrip("\r") for ln in lines]):
@@ -86,7 +88,7 @@ def _fix_doc_markers(text: str, _active: set[str]) -> _Edit:
     return _Edit("\n".join(ln for ln in keep if ln is not None), {"KSY004"})
 
 
-def _fix_trailing_newline(text: str, _active: set[str]) -> _Edit:
+def _fix_trailing_newline(text: str, _active: set[str], _cfg: Config) -> _Edit:
     return _Edit(text.rstrip("\n") + "\n" if text else text, {"KSY003"})
 
 
@@ -144,7 +146,7 @@ def _is_comment(lines: list[str], i: int, protected: set[int]) -> bool:
 # indentation
 
 
-def _fix_indentation(text: str, _active: set[str]) -> Optional[_Edit]:
+def _fix_indentation(text: str, _active: set[str], _cfg: Config) -> Optional[_Edit]:
     doc = _block_map_document(text)
     if doc is None:
         return None
@@ -203,7 +205,7 @@ def _fix_indentation(text: str, _active: set[str]) -> Optional[_Edit]:
                 fix_map(item, dexp + 2, True)
             elif item.kind == SEQ and not item.flow and item.items:
                 raise _Abort("nested block sequence")
-            elif same and item.start.col != dcol + 2:
+            elif same and item.start.col != dcol + 2 and not is_empty(item):
                 rewrite[dline] = (dexp, item.start.col)  # scalar or flow collection
 
     try:
@@ -394,7 +396,7 @@ def _sorted_tags(data: Any) -> Any:
     return out
 
 
-def _fix_reorder(text: str, active: set[str]) -> Optional[_Edit]:
+def _fix_reorder(text: str, active: set[str], _cfg: Config) -> Optional[_Edit]:
     doc = _block_map_document(text)
     if doc is None:
         return None
@@ -433,7 +435,7 @@ def _fix_reorder(text: str, active: set[str]) -> Optional[_Edit]:
 # encoding names
 
 
-def _fix_encodings(text: str, _active: set[str]) -> Optional[_Edit]:
+def _fix_encodings(text: str, _active: set[str], _cfg: Config) -> Optional[_Edit]:
     doc = _parse(text)
     fixes = [
         (n, canon)
@@ -447,23 +449,56 @@ def _fix_encodings(text: str, _active: set[str]) -> Optional[_Edit]:
         quote = n.style or ""
         out = out[: n.start.index] + quote + canon + quote + out[n.end.index :]
 
+    return _Edit(out, {"KSY101"}, _set_values([(n.path, canon) for n, canon in fixes]))
+
+
+def _set_values(changes: list[tuple[tuple, Any]]) -> Callable[[Any], Any]:
+    """``expect`` function: the data with the values at these paths replaced."""
+
     def expect(data: Any) -> Any:
         data = copy.deepcopy(data)
-        for n, canon in fixes:
+        for path, value in changes:
             parent = data
-            for seg in n.path[:-1]:
+            for seg in path[:-1]:
                 parent = parent[seg]
-            parent[n.path[-1]] = canon
+            parent[path[-1]] = value
         return data
 
-    return _Edit(out, {"KSY101"}, expect)
+    return expect
+
+
+# ---------------------------------------------------------------------------
+# doc strings
+
+
+def _fix_docs(text: str, active: set[str], cfg: Config) -> Optional[_Edit]:
+    """KSY400-KSY402. Unlike the other fixes these change the doc strings,
+    each in the one way :mod:`ksylint.rules.docs` verified; docs whose
+    diagnostic is suppressed by a ``disable`` comment are left alone."""
+    doc = _parse(text)
+    if not doc.ok or "\r" in text:
+        return None
+    _, line_off = suppressions(doc.lines)
+    fixes = []
+    for fix in doc_fixes(doc, active, max_length(cfg)):
+        r = get_rule(fix.rule)
+        lines = range(fix.node.start.line, doc.last_line(fix.node) + 1)
+        if not any(suppressed(line_off.get(i + 1, set()), r.id, r.name) for i in lines):
+            fixes.append(fix)
+    if not fixes:
+        return None
+    out = text
+    for fix in sorted(fixes, key=lambda f: -f.start):
+        out = out[: fix.start] + fix.replacement + out[fix.end :]
+    changes = [(f.node.path, f.value) for f in fixes]
+    return _Edit(out, {f.rule for f in fixes}, _set_values(changes))
 
 
 # ---------------------------------------------------------------------------
 
 #: (rule IDs the step fixes, step, why a result that fails verification is
 #: rejected). A step runs if any of its rules is enabled.
-_STEPS: list[tuple[tuple[str, ...], Callable[[str, set[str]], Optional[_Edit]], str]] = [
+_STEPS: list[tuple[tuple[str, ...], Callable[[str, set[str], Config], Optional[_Edit]], str]] = [
     (("KSY002",), _fix_line_endings, "fix would change the parsed data"),
     (("KSY004",), _fix_doc_markers, "fix would change the parsed data"),
     (("KSY003",), _fix_trailing_newline, "fix would change the parsed data"),
@@ -474,6 +509,7 @@ _STEPS: list[tuple[tuple[str, ...], Callable[[str, set[str]], Optional[_Edit]], 
     ),
     (_REORDER_RULES, _fix_reorder, "reordering would change the parsed data"),
     (("KSY101",), _fix_encodings, "renaming encodings would change other data"),
+    (("KSY400", "KSY401", "KSY402"), _fix_docs, "doc fix would change other data"),
 ]
 
 
@@ -529,7 +565,7 @@ def fix_text(
         before_round = cur
         for rule_ids, step, why_rejected in _STEPS:
             active = enabled.intersection(rule_ids)
-            edit = step(cur, active) if active else None
+            edit = step(cur, active, cfg) if active else None
             if edit is None or edit.text == cur:
                 continue
             expected = None
