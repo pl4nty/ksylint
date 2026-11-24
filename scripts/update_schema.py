@@ -20,6 +20,16 @@ import re
 import sys
 import urllib.request
 
+UPSTREAM_REF_RE = re.compile(
+    r"https://github\.com/kaitai-io/([\w-]+)/(issues|pull)/(\d+)(?:#[\w-]+)?"
+)
+
+
+def _plain_ref(m: re.Match[str]) -> str:
+    kind = "issue" if m.group(2) == "issues" else "PR"
+    return f"{m.group(1)} upstream {kind} {m.group(3)}"
+
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DATA = ROOT / "ksylint" / "data"
 
@@ -41,6 +51,10 @@ def main() -> int:
     date = commit["commit"]["committer"]["date"][:10]
     raw = fetch(f"https://raw.githubusercontent.com/{args.repo}/{sha}/ksy_schema.json")
     json.loads(raw)  # sanity check: must be valid JSON
+    # Replace links to upstream issues/PRs with plain text, so this repository
+    # never links back to them.
+    raw = UPSTREAM_REF_RE.sub(_plain_ref, raw.decode("utf-8")).encode("utf-8")
+    json.loads(raw)
     (DATA / "ksy_schema.json").write_bytes(raw)
 
     readme = DATA / "README.md"
