@@ -179,3 +179,33 @@ def test_marker_with_content_is_not_reported_fixable():
 def test_unparsable_file_is_left_alone():
     res = ksylint.fix_text("\ufeffmeta: [\r\n", "x.ksy")
     assert not res.changed and res.skipped
+
+
+def test_deeper_comment_stays_with_the_entry_above_it():
+    text = HEAD + (
+        "types:\n"
+        "  t:\n"
+        "    seq:\n"
+        "      - id: a\n"
+        "        type: u1\n"
+        "      # - id: b (a comment that belongs to `seq`)\n"
+        "    # about doc\n"
+        "    doc: T\n"
+        "seq:\n"
+        "  - id: a\n"
+        "    type: t\n"
+    )
+    res = ksylint.fix_text(text, "x.ksy", config=ksylint.Config(select=["KSY300"]))
+    assert res.text == HEAD + (
+        "seq:\n"
+        "  - id: a\n"
+        "    type: t\n"
+        "types:\n"
+        "  t:\n"
+        "    # about doc\n"
+        "    doc: T\n"
+        "    seq:\n"
+        "      - id: a\n"
+        "        type: u1\n"
+        "      # - id: b (a comment that belongs to `seq`)\n"
+    )

@@ -267,15 +267,23 @@ _Span = tuple[int, int]
 
 def _blocks(doc: YamlDocument, anchors: list[_Span], protected: set[int]) -> Optional[list[_Span]]:
     """Given (first line, last line) of each entry, extend each entry upward
-    over directly-preceding comment lines and down to the last non-blank line
-    before the next entry. Returns (start, end) per entry."""
+    over the comment lines directly above it and down to the last non-blank
+    line before the next entry. Returns (start, end) per entry.
+
+    A comment that is indented deeper than the entry below it is taken to
+    belong to the entry above it (typically commented-out nested content).
+    """
     lines = doc.lines
     out = []
     prev_end = -1
     for i, (a, b) in enumerate(anchors):
         start = a
         if i > 0:
-            while start - 1 > prev_end and _is_comment(lines, start - 1, protected):
+            while (
+                start - 1 > prev_end
+                and _is_comment(lines, start - 1, protected)
+                and indent(lines[start - 1]) <= indent(lines[a])
+            ):
                 start -= 1
         out.append([start, b])
         prev_end = b
