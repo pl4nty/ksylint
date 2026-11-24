@@ -17,6 +17,7 @@ idempotent.
 from __future__ import annotations
 
 import copy
+import functools
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -92,9 +93,16 @@ def _fix_trailing_newline(text: str, _active: set[str]) -> _Edit:
 # line-based fixes: common helpers
 
 
+@functools.lru_cache(maxsize=1)
+def _parse(text: str) -> YamlDocument:
+    """Parse ``text``; consecutive steps usually see the same text. The
+    steps must treat the document as read-only."""
+    return YamlDocument(text)
+
+
 def _block_map_document(text: str) -> Optional[YamlDocument]:
     """Parse ``text`` if the line-based fixers can work on it."""
-    doc = YamlDocument(text)
+    doc = _parse(text)
     root = doc.root
     if not doc.ok or root is None or root.kind != MAP or root.flow or doc.n_documents != 1:
         return None
@@ -242,7 +250,7 @@ def _fix_indentation(text: str, _active: set[str]) -> Optional[_Edit]:
     if new == text:
         return None
     before = {rid for rid, _, _ in indentation_issues(doc)}
-    after = {rid for rid, _, _ in indentation_issues(YamlDocument(new))}
+    after = {rid for rid, _, _ in indentation_issues(_parse(new))}
     return _Edit(new, before - after or {"KSY007"})
 
 
@@ -424,7 +432,7 @@ def _fix_reorder(text: str, active: set[str]) -> Optional[_Edit]:
 
 
 def _fix_encodings(text: str, _active: set[str]) -> Optional[_Edit]:
-    doc = YamlDocument(text)
+    doc = _parse(text)
     fixes = [
         (n, canon)
         for n, canon in encoding_fixes(doc.root)
