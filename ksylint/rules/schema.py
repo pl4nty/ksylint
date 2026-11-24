@@ -57,11 +57,29 @@ def _flatten(err: Any) -> Iterator[Any]:
     from jsonschema.exceptions import best_match
 
     if err.validator in ("anyOf", "oneOf") and err.context:
-        best = best_match(err.context)
+        best = best_match(_relevant_alternatives(err.context))
         if best is not None:
             yield from _flatten(best)
             return
     yield err
+
+
+def _relevant_alternatives(errors: list[Any]) -> list[Any]:
+    """The errors of the alternatives of an anyOf/oneOf that come closest to
+    matching. An alternative whose type does not even match (``X`` vs. a
+    list of ``X``) is dropped, then the errors deepest in the instance win:
+    they point at the actual problem (an item of a list, a key of a map)."""
+    branches: dict[Any, list[Any]] = {}
+    for e in errors:
+        branches.setdefault(e.schema_path[0] if e.schema_path else None, []).append(e)
+    kept = [
+        e
+        for errs in branches.values()
+        if not any(x.validator == "type" and not x.relative_path for x in errs)
+        for e in errs
+    ] or errors
+    depth = max(len(e.relative_path) for e in kept)
+    return [e for e in kept if len(e.relative_path) == depth]
 
 
 @rule(
@@ -181,3 +199,57 @@ def encoding_name(ctx: LintContext) -> None:
 def encoding_fixes(root: Node | None) -> list[tuple[Node, str]]:
     """(scalar node, canonical name) pairs for the autofixer."""
     return [(n, canon) for n, canon in _encodings(root) if canon is not None]
+
+
+def _attrs(root: Node | None) -> Iterator[Node]:
+    for spec in iter_specs(root):
+        if spec.kind in (ATTR, INSTANCE):
+            yield spec.node
+
+
+@rule(
+    "KSY102",
+    "ineffective-pad-right",
+    "warning",
+    "`pad-right` has no effect without `size` or `size-eos: true`.",
+)
+def ineffective_pad_right(ctx: LintContext) -> None:
+    # The compiler accepts `pad-right` with only a `terminator` but never
+    # strips the padding: it reads up to the terminator and stops.
+    for attr in _attrs(ctx.root):
+        pad = attr.key_node("pad-right")
+        if pad is None or attr.get("size") is not None:
+            continue
+        size_eos = attr.get("size-eos")
+        if size_eos is not None and size_eos.value is True:
+            continue
+        ctx.report(
+            "`pad-right` is ignored without `size` or `size-eos: true`; remove it or give a size",
+            pad,
+        )
+
+
+@rule(
+    "KSY103",
+    "strz-terminator",
+    "warning",
+    "`type: strz` already implies `terminator: 0`; use `type: str` for other terminators.",
+)
+def strz_terminator(ctx: LintContext) -> None:
+    # The compiler accepts `terminator` with `type: strz`; the explicit
+    # terminator replaces the implied NUL.
+    for attr in _attrs(ctx.root):
+        t = attr.get("type")
+        term = attr.get("terminator")
+        if t is None or term is None or t.value != "strz":
+            continue
+        if term.value == 0:
+            ctx.report(
+                "`terminator: 0` is redundant with `type: strz`", attr.key_node("terminator")
+            )
+        else:
+            ctx.report(
+                f"`terminator: {term.raw}` overrides the NUL terminator implied by `type: strz`; "
+                "use `type: str` with this terminator",
+                attr.key_node("terminator"),
+            )

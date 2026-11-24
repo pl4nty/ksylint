@@ -163,6 +163,8 @@ fixed by `--fix`.
 |----|------|----------|:---:|-------------|
 | `KSY100` | `schema` | error |  | File must validate against the official KSY JSON schema. |
 | `KSY101` | `encoding-name` | error | yes | Use canonical, byte-order-explicit encoding names (e.g. `UTF-8`, `ASCII`, `UTF-16LE`). ([style guide](https://doc.kaitai.io/ksy_style_guide.html#encoding-name)) |
+| `KSY102` | `ineffective-pad-right` | warning |  | `pad-right` has no effect without `size` or `size-eos: true`. |
+| `KSY103` | `strz-terminator` | warning |  | `type: strz` already implies `terminator: 0`; use `type: str` for other terminators. |
 
 #### Meta section
 

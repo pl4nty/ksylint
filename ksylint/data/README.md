@@ -20,5 +20,10 @@ python scripts/update_schema.py --ref <sha>  # a specific commit
 The script rewrites this README with the new commit hash.
 
 Small, documented corrections that ksylint applies on top of the vendored
-schema at load time (for keys that the current compiler accepts but the
-schema does not yet describe) live in `ksylint/schema.py` (`SCHEMA_PATCHES`).
+schema at load time live in `ksylint/schema.py` (`SCHEMA_PATCHES`). Each one
+relaxes the schema where the current compiler (0.11) accepts a spec that the
+schema rejects: the `parent` key, custom `process` routines, `pad-right`
+without a size and `terminator` with `type: strz` (the last two are reported
+by dedicated rules instead). A patch records the value it replaces, so a
+schema refresh that makes it obsolete fails loudly instead of being patched
+silently.
