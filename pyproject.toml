@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ksylint"
-version = "1.0.0.dev0"
+dynamic = ["version"]
 description = "Linter and formatter for Kaitai Struct .ksy files, following the official KSY style guide."
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -46,6 +46,9 @@ Issues = "https://github.com/pl4nty/ksylint/issues"
 
 [project.scripts]
 ksylint = "ksylint.cli:main"
+
+[tool.hatch.version]
+path = "ksylint/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ksylint"]
