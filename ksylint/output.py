@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from collections import Counter
 from collections.abc import Iterable
+from pathlib import PurePath
+from urllib.parse import quote
 
 from .diagnostic import Diagnostic, Severity
 from .registry import all_rules
@@ -12,29 +14,39 @@ from .registry import all_rules
 FORMATS = ("text", "json", "sarif", "github")
 
 
-def format_text(diags: list[Diagnostic], n_files: int, *, statistics: bool = False) -> str:
+def _plural(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def format_text(
+    diags: list[Diagnostic], n_files: int, *, statistics: bool = False, summary: bool = True
+) -> str:
     out = [str(d) for d in diags]
     if statistics and diags:
         out.append("")
         counts = Counter((d.rule_id, d.rule_name) for d in diags)
         for (rid, name), n in sorted(counts.items()):
             out.append(f"{n:6d}  {rid}  {name}")
-    sev = Counter(d.severity for d in diags)
-    nfix = sum(1 for d in diags if d.fixable)
-    if diags:
-        files = len({d.file for d in diags})
+    if not summary:
+        pass
+    elif diags:
+        sev = Counter(d.severity for d in diags)
         parts = [
-            f"{sev[s]} {s.value}{'s' if sev[s] != 1 and s != Severity.INFO else ''}"
+            f"{sev[s]} info" if s is Severity.INFO else _plural(sev[s], s.value)
             for s in Severity
             if sev[s]
         ]
-        msg = f"Found {len(diags)} problem{'s' if len(diags) != 1 else ''} ({', '.join(parts)}) in {files} of {n_files} file{'s' if n_files != 1 else ''}."
+        msg = (
+            f"Found {_plural(len(diags), 'problem')} ({', '.join(parts)}) "
+            f"in {len({d.file for d in diags})} of {_plural(n_files, 'file')}."
+        )
+        nfix = sum(d.fixable for d in diags)
         if nfix:
             msg += f" {nfix} fixable with `--fix`."
         out.append(msg)
     else:
-        out.append(f"All checks passed ({n_files} file{'s' if n_files != 1 else ''}).")
-    return "\n".join(out) + "\n"
+        out.append(f"All checks passed ({_plural(n_files, 'file')}).")
+    return "".join(ln + "\n" for ln in out)
 
 
 def format_json(diags: list[Diagnostic]) -> str:
@@ -42,6 +54,12 @@ def format_json(diags: list[Diagnostic]) -> str:
 
 
 _SARIF_LEVEL = {Severity.ERROR: "error", Severity.WARNING: "warning", Severity.INFO: "note"}
+
+
+def _uri(file: str) -> str:
+    """A file name as a URI reference (``file:`` URI if it is absolute)."""
+    path = PurePath(file)
+    return path.as_uri() if path.is_absolute() else quote(path.as_posix())
 
 
 def format_sarif(diags: list[Diagnostic], version: str) -> str:
@@ -61,7 +79,7 @@ def format_sarif(diags: list[Diagnostic], version: str) -> str:
             "locations": [
                 {
                     "physicalLocation": {
-                        "artifactLocation": {"uri": d.file.replace("\\", "/")},
+                        "artifactLocation": {"uri": _uri(d.file)},
                         "region": region,
                     }
                 }
@@ -90,7 +108,13 @@ def format_sarif(diags: list[Diagnostic], version: str) -> str:
     doc = {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
-        "runs": [{"tool": {"driver": driver}, "results": results}],
+        "runs": [
+            {
+                "tool": {"driver": driver},
+                "columnKind": "unicodeCodePoints",
+                "results": results,
+            }
+        ],
     }
     return json.dumps(doc, indent=2) + "\n"
 

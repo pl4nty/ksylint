@@ -143,6 +143,55 @@ def test_stdin(monkeypatch, capsys):
     assert "bad.ksy:9:15" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("text", [GOOD, BAD], ids=["clean", "fixable"])
+def test_stdin_fix_always_writes_the_result(monkeypatch, capsys, text):
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(text.encode())))
+    assert main(["-", "--fix"]) == 0
+    fixed = (
+        GOOD if text is GOOD else BAD.replace("type: str\n    size: 1", "size: 1\n    type: str")
+    )
+    assert capsys.readouterr().out == fixed.replace("ascii", "ASCII")
+
+
+def test_quiet_and_statistics(files, capsys):
+    main([".", "-q"])
+    out = capsys.readouterr().out
+    assert len(out.splitlines()) == 2 and "Found" not in out
+    main([".", "-q", "--statistics"])
+    out = capsys.readouterr().out
+    assert "     1  KSY101  encoding-name\n" in out and "Found" not in out
+    assert main(["good.ksy", "-q"]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_sarif_locations_are_uri_references(files, capsys):
+    odd = files / "a dir"
+    odd.mkdir()
+    (odd / "bäd.ksy").write_text(BAD)
+    main(["a dir", str(odd), "--format", "sarif"])
+    run = json.loads(capsys.readouterr().out)["runs"][0]
+    uris = {
+        r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] for r in run["results"]
+    }
+    assert uris == {"a%20dir/b%C3%A4d.ksy", (odd / "bäd.ksy").as_uri()}
+    assert run["columnKind"] == "unicodeCodePoints"
+
+
+def test_fix_write_error_is_reported(files, capsys, monkeypatch):
+    import builtins
+
+    real_open = builtins.open
+
+    def deny(file, mode="r", *a, **k):
+        if "w" in mode:
+            raise PermissionError(13, "Permission denied", str(file))
+        return real_open(file, mode, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", deny)
+    assert main([".", "--fix"]) == 2
+    assert "Permission denied" in capsys.readouterr().err
+
+
 def test_compile_mode(files, capsys, tmp_path):
     import shutil
 

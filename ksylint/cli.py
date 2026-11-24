@@ -5,13 +5,14 @@ from __future__ import annotations
 import argparse
 import difflib
 import fnmatch
+import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from . import __version__
-from .config import Config, ConfigError, load_config
+from .config import Config, load_config
 from .diagnostic import Diagnostic, Severity
 from .fix import fix_text
 from .linter import lint_text
@@ -96,8 +97,6 @@ def build_parser() -> argparse.ArgumentParser:
 def list_rules(fmt: str) -> str:
     rules = all_rules()
     if fmt == "json":
-        import json
-
         return (
             json.dumps(
                 [
@@ -126,29 +125,21 @@ def list_rules(fmt: str) -> str:
 
 
 def collect_files(paths: list[str], exclude: list[str]) -> list[str]:
+    """Expand directories to the ``*.ksy`` files below them (skipping hidden
+    directories and ``exclude`` patterns); other paths are kept as given."""
     out: list[str] = []
     for p in paths:
-        if p == "-":
-            out.append(p)
+        if not os.path.isdir(p):
+            out.append(p)  # a file, or `-` for stdin
             continue
-        if os.path.isdir(p):
-            for f in sorted(Path(p).rglob("*.ksy")):
-                if any(
-                    part.startswith(".") and part not in (".", "..")
-                    for part in f.relative_to(p).parts[:-1]
-                ):
-                    continue
-                rel = f.as_posix()
-                if any(
-                    fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(f.relative_to(p).as_posix(), pat)
-                    for pat in exclude
-                ):
-                    continue
-                out.append(f.as_posix())
-        else:
-            out.append(p)
-    seen: set[str] = set()
-    return [f for f in out if not (f in seen or seen.add(f))]
+        for f in sorted(Path(p).rglob("*.ksy")):
+            rel = f.relative_to(p)
+            if any(part.startswith(".") for part in rel.parts[:-1]):
+                continue
+            if any(fnmatch.fnmatch(x.as_posix(), pat) for x in (f, rel) for pat in exclude):
+                continue
+            out.append(f.as_posix())
+    return list(dict.fromkeys(out))
 
 
 def _configure(args: argparse.Namespace) -> Config:
@@ -171,85 +162,93 @@ def _configure(args: argparse.Namespace) -> Config:
     return cfg
 
 
+def _read(path: str) -> bytes:
+    return sys.stdin.buffer.read() if path == "-" else Path(path).read_bytes()
+
+
+def _fix(args: argparse.Namespace, cfg: Config, sources: dict[str, Union[str, bytes]]) -> bool:
+    """Apply ``--fix`` / ``--diff``. Fixed text replaces the entry in
+    ``sources``. Returns whether anything was (or, for ``--diff``, would be)
+    changed."""
+    changed = False
+    for f, data in sources.items():
+        name = _display_name(args, f)
+        res = fix_text(data, name, config=cfg)
+        changed |= res.changed
+        if args.diff:
+            sys.stdout.writelines(
+                difflib.unified_diff(
+                    res.original.splitlines(True),
+                    res.text.splitlines(True),
+                    fromfile=f"a/{name}",
+                    tofile=f"b/{name}",
+                )
+            )
+            continue
+        if f == "-":
+            sys.stdout.write(res.text)
+        elif res.changed:
+            with open(f, "w", encoding="utf-8", newline="") as fh:
+                fh.write(res.text)
+        if res.changed:
+            sources[f] = res.text
+    return changed
+
+
+def _display_name(args: argparse.Namespace, path: str) -> str:
+    return (args.stdin_filename or "<stdin>") if path == "-" else path
+
+
+def _fail(error: Exception) -> int:
+    sys.stderr.write(f"ksylint: error: {error}\n")
+    return 2
+
+
 def main(argv: Optional[list[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     out = sys.stdout
 
     if args.list_rules:
         out.write(list_rules("json" if args.format == "json" else "text"))
         return 0
     if not args.paths:
-        build_parser().print_usage(sys.stderr)
+        parser.print_usage(sys.stderr)
         sys.stderr.write("ksylint: error: no files given\n")
         return 2
     try:
         cfg = _configure(args)
-    except (ConfigError, ValueError, OSError) as e:
-        sys.stderr.write(f"ksylint: error: {e}\n")
-        return 2
-
-    files = collect_files(args.paths, cfg.exclude)
-    texts: dict[str, bytes] = {}
-    for f in files:
-        try:
-            if f == "-":
-                texts[f] = sys.stdin.buffer.read()
-            else:
-                with open(f, "rb") as fh:
-                    texts[f] = fh.read()
-        except OSError as e:
-            sys.stderr.write(f"ksylint: error: {e}\n")
-            return 2
-
-    changed_any = False
-    final: dict[str, str | bytes] = {}
-    for f, data in texts.items():
-        name = (args.stdin_filename or "<stdin>") if f == "-" else f
-        if args.fix or args.diff:
-            res = fix_text(data, name, config=cfg)
-            if res.changed:
-                changed_any = True
-                if args.diff:
-                    out.writelines(
-                        difflib.unified_diff(
-                            res.original.splitlines(True),
-                            res.text.splitlines(True),
-                            fromfile=f"a/{name}",
-                            tofile=f"b/{name}",
-                        )
-                    )
-                elif f == "-":
-                    out.write(res.text)
-                else:
-                    with open(f, "w", encoding="utf-8", newline="") as fh:
-                        fh.write(res.text)
-            final[f] = res.text if (args.fix and not args.diff) else data
-        else:
-            final[f] = data
+        sources: dict[str, Union[str, bytes]] = {
+            f: _read(f) for f in collect_files(args.paths, cfg.exclude)
+        }
+    except (ValueError, OSError) as e:  # ConfigError is a ValueError
+        return _fail(e)
+    try:
+        changed = _fix(args, cfg, sources) if args.fix or args.diff else False
+    except OSError as e:
+        return _fail(e)
 
     externals: dict[str, dict] = {}
     if cfg.compile:
         from .compiler import CompilerError, run_ksc
 
-        disk = [f for f in final if f != "-"]
+        disk = [f for f in sources if f != "-"]
         try:
             results = run_ksc(disk, cfg)
         except CompilerError as e:
-            sys.stderr.write(f"ksylint: error: {e}\n")
-            return 2
+            return _fail(e)
         for f in disk:
             r = results.get(f) or results.get(os.path.normpath(f))
             if r is not None:
                 externals[f] = {"ksc": r}
 
     diags: list[Diagnostic] = []
-    for f, data in final.items():
-        name = (args.stdin_filename or "<stdin>") if f == "-" else f
-        diags.extend(lint_text(data, name, config=cfg, external=externals.get(f)))
+    for f, data in sources.items():
+        diags.extend(lint_text(data, _display_name(args, f), config=cfg, external=externals.get(f)))
 
     if args.diff:
         pass  # diff already printed; diagnostics are not shown
-    elif args.fix and "-" in final:
+    elif args.fix and "-" in sources:
         pass  # fixed text went to stdout
     elif args.format == "json":
         out.write(format_json(diags))
@@ -258,15 +257,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     elif args.format == "github":
         out.write(format_github(diags))
     else:
-        text = format_text(diags, len(final), statistics=args.statistics)
-        if args.quiet:
-            text = "".join(ln + "\n" for ln in text.splitlines()[: len(diags)])
-        out.write(text)
+        out.write(
+            format_text(diags, len(sources), statistics=args.statistics, summary=not args.quiet)
+        )
 
     if args.exit_zero:
         return 0
     if args.diff:
-        return 1 if changed_any else 0
+        return 1 if changed else 0
     threshold = Severity.parse(cfg.fail_on).rank
     return 1 if any(d.severity.rank >= threshold for d in diags) else 0
 
