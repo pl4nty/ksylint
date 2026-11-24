@@ -42,8 +42,7 @@ def _check(ctx: LintContext, kinds: tuple[str, ...], what: str) -> None:
     for spec in specs.iter_specs(ctx.root):
         if spec.kind not in kinds or spec.node.flow:
             continue
-        order = specs.order_of(spec.kind)
-        res = misordered(spec.node, order)
+        res = misordered(spec.node, specs.ORDERS[spec.kind])
         if res is None:
             continue
         k, before, expected = res

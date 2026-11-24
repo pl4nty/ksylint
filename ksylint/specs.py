@@ -8,11 +8,15 @@ values, switch ``cases``, ``xref``) are never key-ordered.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Optional
 
 from .yamldoc import Node
+
+#: lower_snake_case identifier (ids and type, instance and enum names).
+IDENT_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # Spec kinds
 TYPE = "type"
@@ -110,10 +114,6 @@ ORDERS = {
     ENUM_VALUE: ENUM_VALUE_ORDER,
     SWITCH: SWITCH_ORDER,
 }
-
-
-def order_of(kind: str) -> Optional[dict[str, int]]:
-    return ORDERS.get(kind)
 
 
 @dataclass

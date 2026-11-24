@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from ..linter import LintContext
 from ..registry import rule
 
@@ -15,12 +17,7 @@ def _report(ctx: LintContext, kind: str) -> None:
         return
     for item in result.get(kind, []):
         path = [str(p) for p in item.get("path", [])]
-        node = ctx.doc.find(path) if ctx.root is not None else None
-        # walk up until a node is found
-        p = list(path)
-        while node is None and p:
-            p.pop()
-            node = ctx.doc.find(p) if ctx.root is not None else None
+        node = ctx.doc.find_nearest(path)
         msg = item.get("message", "").strip()
         if kind == "warnings" and any(msg.startswith(p) for p in _NATIVE):
             continue  # covered by a native rule with autofix
@@ -38,8 +35,6 @@ def _report(ctx: LintContext, kind: str) -> None:
 
 
 def _same_file(a: str, b: str) -> bool:
-    import os
-
     try:
         return os.path.samefile(a, b)
     except OSError:

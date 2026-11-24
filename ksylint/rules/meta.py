@@ -9,7 +9,7 @@ from typing import Optional
 
 from ..linter import LintContext
 from ..registry import rule
-from ..specs import META_NESTED_KEYS, iter_specs
+from ..specs import META, META_NESTED, META_NESTED_KEYS, iter_specs
 from ..yamldoc import Node
 
 HUMAN_KEYS = ("title", "application", "file-extension", "xref", "tags")
@@ -243,7 +243,7 @@ def tags_order(ctx: LintContext) -> None:
 )
 def nested_meta_keys(ctx: LintContext) -> None:
     for spec in iter_specs(ctx.root):
-        if spec.kind != "meta-nested":
+        if spec.kind != META_NESTED:
             continue
         for k, _ in spec.node.items:
             key = k.value
@@ -263,7 +263,7 @@ def nested_meta_keys(ctx: LintContext) -> None:
 )
 def reserved_keys(ctx: LintContext) -> None:
     for spec in iter_specs(ctx.root):
-        if spec.kind not in ("meta", "meta-nested"):
+        if spec.kind not in (META, META_NESTED):
             continue
         for k, _ in spec.node.items:
             if k.value in RESERVED_KEYS:

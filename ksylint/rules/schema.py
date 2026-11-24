@@ -10,10 +10,8 @@ from ..encodings import canonical_encoding, is_canonical
 from ..linter import LintContext
 from ..registry import rule
 from ..schema import schema, validator
-from ..specs import ATTR, INSTANCE, META, META_NESTED, iter_specs
+from ..specs import ATTR, IDENT_RE, INSTANCE, META, META_NESTED, iter_specs
 from ..yamldoc import Node
-
-IDENT_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def _jsonable(o: Any) -> Any:
@@ -79,7 +77,7 @@ def schema_validation(ctx: LintContext) -> None:
     for top in validator().iter_errors(data):
         for err in _flatten(top):
             path = list(err.absolute_path)
-            node = _nearest(ctx, path)
+            node = ctx.doc.find_nearest(path)
             if _handled_elsewhere(ctx, err, path):
                 continue
             if err.validator == "additionalProperties" and isinstance(err.instance, dict):
@@ -121,14 +119,6 @@ def _orig_key(node: Node, k: str) -> Any:
     return k
 
 
-def _nearest(ctx: LintContext, path: list) -> Node | None:
-    for i in range(len(path), -1, -1):
-        n = ctx.doc.find(path[:i])
-        if n is not None:
-            return n
-    return ctx.root
-
-
 def _extra_keys(err: Any) -> list[str]:
     props = err.schema.get("properties", {})
     pats = err.schema.get("patternProperties", {})
@@ -154,6 +144,16 @@ def _handled_elsewhere(ctx: LintContext, err: Any, path: list) -> bool:
     return False
 
 
+def _encodings(root: Node | None) -> Iterator[tuple[Node, str | None]]:
+    """(``encoding`` scalar, canonical name or None) for every encoding that
+    is not spelled canonically."""
+    for spec in iter_specs(root):
+        if spec.kind in (META, META_NESTED, ATTR, INSTANCE):
+            n = spec.node.get("encoding")
+            if n is not None and n.is_str and not is_canonical(n.value):
+                yield n, canonical_encoding(n.value)
+
+
 @rule(
     "KSY101",
     "encoding-name",
@@ -163,16 +163,8 @@ def _handled_elsewhere(ctx: LintContext, err: Any, path: list) -> bool:
     fixable=True,
 )
 def encoding_name(ctx: LintContext) -> None:
-    for spec in iter_specs(ctx.root):
-        if spec.kind not in (META, META_NESTED, ATTR, INSTANCE):
-            continue
-        n = spec.node.get("encoding")
-        if n is None or not n.is_str:
-            continue
+    for n, canon in _encodings(ctx.root):
         name = n.value
-        if is_canonical(name):
-            continue
-        canon = canonical_encoding(name)
         if canon is not None:
             ctx.report(f"use canonical encoding name `{canon}` instead of `{name}`", n)
         elif re.sub(r"[-_]", "", name).upper() in ("UTF16", "UTF32", "UCS2", "UNICODE"):
@@ -188,14 +180,4 @@ def encoding_name(ctx: LintContext) -> None:
 
 def encoding_fixes(root: Node | None) -> list[tuple[Node, str]]:
     """(scalar node, canonical name) pairs for the autofixer."""
-    out = []
-    for spec in iter_specs(root):
-        if spec.kind not in (META, META_NESTED, ATTR, INSTANCE):
-            continue
-        n = spec.node.get("encoding")
-        if n is None or not n.is_str or is_canonical(n.value):
-            continue
-        canon = canonical_encoding(n.value)
-        if canon is not None:
-            out.append((n, canon))
-    return out
+    return [(n, canon) for n, canon in _encodings(root) if canon is not None]

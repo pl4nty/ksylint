@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import re
 from dataclasses import dataclass
 from typing import Any, Optional, Union
@@ -58,15 +59,11 @@ class LintContext:
         self.cache: dict[str, Any] = {}
         self._rule: Optional[Rule] = None
         self.options: dict[str, Any] = {}
-        self._data: Any = None
-        self._data_ready = False
 
-    @property
+    @functools.cached_property
     def data(self) -> Any:
-        if not self._data_ready:
-            self._data = self.doc.data()
-            self._data_ready = True
-        return self._data
+        """The document as plain Python data (like ``yaml.safe_load``)."""
+        return self.doc.data()
 
     @property
     def display_name(self) -> str:
@@ -166,8 +163,6 @@ def lint_text(
     reporting and for the filename-related rules (``meta/id`` must match the
     file name, ``.ksy`` extension); pass ``None`` to skip those.
     """
-    from .registry import all_rules  # noqa: F401  (ensures rules are loaded)
-
     cfg = config or Config()
     ctx = LintContext(decode(text, filename), cfg, external=external)
     diags = ctx.run(cfg.enabled_rules())

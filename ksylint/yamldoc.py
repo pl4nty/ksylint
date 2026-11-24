@@ -22,6 +22,10 @@ MAP = "map"
 SEQ = "seq"
 SCALAR = "scalar"
 
+#: A `-` alone on its line (stripped), possibly followed by a comment.
+_BARE_DASH_RE = re.compile(r"-(\s+#.*)?")
+_KINDS = {yaml.MappingNode: MAP, yaml.SequenceNode: SEQ, yaml.ScalarNode: SCALAR}
+
 #: Line breaks (to YAML) that do not end a line in :attr:`YamlDocument.lines`.
 _ODD_BREAK_RE = re.compile("\r(?!\n)|[\x85\u2028\u2029]")
 
@@ -48,27 +52,12 @@ class Node:
       scalar text.
     """
 
-    __slots__ = (
-        "end",
-        "flow",
-        "is_key",
-        "items",
-        "kind",
-        "parent",
-        "path",
-        "ptr",
-        "raw",
-        "start",
-        "style",
-        "tag",
-        "value",
-    )
+    __slots__ = ("end", "flow", "items", "kind", "path", "ptr", "raw", "start", "style", "value")
 
     def __init__(self, kind: str, start: Pos, end: Pos) -> None:
         self.kind = kind
         self.start = start
         self.end = end
-        self.tag: str = ""
         self.value: Any = None
         self.raw: str = ""
         self.items: list = []
@@ -76,8 +65,6 @@ class Node:
         self.flow: bool = False
         self.path: tuple = ()
         self.ptr: str = ""
-        self.parent: Optional[Node] = None
-        self.is_key = False
 
     # -- convenience -------------------------------------------------------
     @property
@@ -100,32 +87,20 @@ class Node:
     def is_block(self) -> bool:
         return self.kind in (MAP, SEQ) and not self.flow
 
-    def keys(self) -> list:
-        return [k.value for k, _ in self.items] if self.kind == MAP else []
+    def _item(self, key: Any) -> tuple[Optional[Node], Optional[Node]]:
+        """The (key node, value node) pair for ``key``; the last one wins
+        if the key is duplicated, like when the document is loaded."""
+        if self.kind == MAP:
+            for k, v in reversed(self.items):
+                if k.value == key and type(k.value) is type(key):
+                    return k, v
+        return None, None
 
-    def get(self, key: Any, default: Optional[Node] = None) -> Optional[Node]:
-        if self.kind != MAP:
-            return default
-        found = default
-        for k, v in self.items:
-            if k.value == key and type(k.value) is type(key):
-                found = v
-        return found
+    def get(self, key: Any) -> Optional[Node]:
+        return self._item(key)[1]
 
     def key_node(self, key: Any) -> Optional[Node]:
-        if self.kind != MAP:
-            return None
-        found = None
-        for k, _ in self.items:
-            if k.value == key and type(k.value) is type(key):
-                found = k
-        return found
-
-    def map_items(self) -> list[tuple[Node, Node]]:
-        return list(self.items) if self.kind == MAP else []
-
-    def seq_items(self) -> list[Node]:
-        return list(self.items) if self.kind == SEQ else []
+        return self._item(key)[0]
 
     def walk(self) -> Iterator[Node]:
         """Pre-order traversal over value nodes (keys excluded)."""
@@ -139,13 +114,18 @@ class Node:
 
     def to_data(self) -> Any:
         if self.kind == MAP:
-            return {_hashable(k.value): v.to_data() for k, v in self.items}
+            return {k.value: v.to_data() for k, v in self.items}
         if self.kind == SEQ:
             return [v.to_data() for v in self.items]
         return self.value
 
     def __repr__(self) -> str:
         return f"<Node {self.kind} {self.ptr or '/'} @{self.start.line + 1}:{self.start.col + 1}>"
+
+
+def indent(line: str) -> int:
+    """Number of leading spaces."""
+    return len(line) - len(line.lstrip(" "))
 
 
 def _hashable(v: Any) -> Any:
@@ -156,7 +136,7 @@ def _hashable(v: Any) -> Any:
         return repr(v)
 
 
-def escape_ptr(seg: str) -> str:
+def _escape_ptr(seg: str) -> str:
     return seg.replace("~", "~0").replace("/", "~1")
 
 
@@ -178,7 +158,6 @@ class YamlDocument:
         self.error: Optional[yaml.YAMLError] = None
         self.error_pos: Optional[Pos] = None
         self.error_message = ""
-        self.nodes_by_ptr: dict[str, Node] = {}
         self._constructor = SafeConstructor()
         self._parse()
 
@@ -204,7 +183,7 @@ class YamlDocument:
                 if raw_root is None:
                     raw_root = n
             if raw_root is not None:
-                self.root = self._build(raw_root, (), "", None)
+                self.root = self._build(raw_root, (), "")
         except yaml.YAMLError as e:
             self.error = e
             mark = getattr(e, "problem_mark", None) or getattr(e, "context_mark", None)
@@ -230,48 +209,27 @@ class YamlDocument:
             c.constructed_objects.clear()
             c.recursive_objects.clear()
 
-    def _span(self, raw: yaml.Node) -> tuple[Pos, Pos]:
-        return self.pos(raw.start_mark.index), self.pos(raw.end_mark.index)
-
-    def _build(self, raw: yaml.Node, path: tuple, ptr: str, parent: Optional[Node]) -> Node:
-        if isinstance(raw, yaml.MappingNode):
-            node = Node(MAP, *self._span(raw))
-            node.flow = bool(raw.flow_style)
-        elif isinstance(raw, yaml.SequenceNode):
-            node = Node(SEQ, *self._span(raw))
-            node.flow = bool(raw.flow_style)
-        else:
-            node = Node(SCALAR, *self._span(raw))
+    def _build(self, raw: yaml.Node, path: tuple, ptr: str) -> Node:
+        node = Node(_KINDS[type(raw)], self.pos(raw.start_mark.index), self.pos(raw.end_mark.index))
+        node.path = path
+        node.ptr = ptr
+        if node.kind == SCALAR:
             node.style = raw.style
             node.raw = raw.value
             node.value = self._construct_scalar(raw)
-        node.tag = raw.tag
-        node.path = path
-        node.ptr = ptr
-        node.parent = parent
-        self.nodes_by_ptr.setdefault(ptr, node)
-        if node.kind == MAP:
-            for kraw, vraw in raw.value:
-                if isinstance(kraw, yaml.ScalarNode):
-                    key = Node(SCALAR, *self._span(kraw))
-                    key.style = kraw.style
-                    key.raw = kraw.value
-                    key.value = self._construct_scalar(kraw)
-                    key.tag = kraw.tag
-                else:
-                    key = self._build(kraw, path, ptr, node)
-                    key.value = _hashable(key.to_data())
-                    key.raw = str(key.value)
-                key.is_key = True
-                key.parent = node
-                seg = key.raw if key.kind == SCALAR else str(key.value)
-                key.ptr = ptr + "/" + escape_ptr(seg)
-                key.path = (*path, key.value)
-                val = self._build(vraw, (*path, key.value), key.ptr, node)
-                node.items.append((key, val))
-        elif node.kind == SEQ:
-            for i, vraw in enumerate(raw.value):
-                node.items.append(self._build(vraw, (*path, i), f"{ptr}/{i}", node))
+            return node
+        node.flow = bool(raw.flow_style)
+        if node.kind == SEQ:
+            node.items = [self._build(v, (*path, i), f"{ptr}/{i}") for i, v in enumerate(raw.value)]
+            return node
+        for kraw, vraw in raw.value:
+            key = self._build(kraw, path, ptr)
+            if key.kind != SCALAR:  # complex key: only needs to be hashable
+                key.value = _hashable(key.to_data())
+                key.raw = str(key.value)
+            key.path = (*path, key.value)
+            key.ptr = f"{ptr}/{_escape_ptr(key.raw)}"
+            node.items.append((key, self._build(vraw, key.path, key.ptr)))
         return node
 
     # -- data / positions ------------------------------------------------------
@@ -303,6 +261,14 @@ class YamlDocument:
                 return None
         return node
 
+    def find_nearest(self, path: tuple | list) -> Optional[Node]:
+        """Like :meth:`find`, but fall back to the closest existing ancestor."""
+        for i in range(len(path), -1, -1):
+            node = self.find(path[:i])
+            if node is not None:
+                return node
+        return self.root
+
     def line_starts_at(self, pos: Pos) -> bool:
         """True if only whitespace precedes ``pos`` on its line."""
         line = self.lines[pos.line] if pos.line < len(self.lines) else ""
@@ -324,6 +290,17 @@ class YamlDocument:
             k, v = node.items[-1]
             return max(k.end.line, self.last_line(v))
         return self.last_line(node.items[-1])
+
+    def block_scalar_indent(self, node: Node) -> Optional[int]:
+        """Indentation of the content of a ``|`` / ``>`` scalar, or ``None``
+        if it is empty or has an explicit indentation indicator (``|2``)."""
+        header = self.lines[node.start.line][node.start.col :].split("#", 1)[0]
+        if any(c.isdigit() for c in header):
+            return None
+        for i in range(node.start.line + 1, self.last_line(node) + 1):
+            if self.lines[i].strip():
+                return indent(self.lines[i])
+        return None
 
     def _blank(self, i: int) -> bool:
         return i >= len(self.lines) or self.lines[i].strip() == ""
@@ -348,12 +325,7 @@ class YamlDocument:
             if s == "" or s.startswith("#"):
                 i -= 1
                 continue
-            if s == "-" or s.startswith("- #") or s.startswith("-\t#") or s.startswith("-  #"):
+            if _BARE_DASH_RE.fullmatch(s):
                 return i, self.lines[i].index("-"), False
             return None
         return None
-
-
-def plain_load(text: str) -> Any:
-    """Load YAML the plain way (for semantic comparisons)."""
-    return yaml.safe_load(text)

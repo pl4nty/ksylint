@@ -122,7 +122,7 @@ def single_document(ctx: LintContext) -> None:
 def yaml_syntax(ctx: LintContext) -> None:
     doc = ctx.doc
     if doc.error is not None:
-        pos = doc.error_pos or Pos(0, 0, 0)
+        pos = doc.error_pos or Pos(0, 0)
         ctx.report(f"YAML syntax error: {doc.error_message}", pos=pos)
         return
     if doc.root is None:
@@ -138,7 +138,7 @@ def duplicate_key(ctx: LintContext) -> None:
             continue
         seen: dict = {}
         for k, _ in n.items:
-            key = (type(k.value).__name__, k.value) if _hashable(k.value) else k.raw
+            key = (type(k.value), k.value)
             if key in seen:
                 first = seen[key]
                 ctx.report(
@@ -148,16 +148,14 @@ def duplicate_key(ctx: LintContext) -> None:
                 seen[key] = k
 
 
-def _hashable(v: object) -> bool:
-    try:
-        hash(v)
-        return True
-    except TypeError:
-        return False
-
-
 # ---------------------------------------------------------------------------
 # indentation
+
+
+def _report_indentation(ctx: LintContext, rule_id: str) -> None:
+    for rid, msg, pos in indentation_issues(ctx):
+        if rid == rule_id:
+            ctx.report(msg, pos=pos)
 
 
 @rule(
@@ -169,10 +167,7 @@ def _hashable(v: object) -> bool:
     fixable=True,
 )
 def indentation(ctx: LintContext) -> None:
-    for issue in indentation_issues(ctx):
-        if issue[0] == "KSY007":
-            _, msg, pos = issue
-            ctx.report(msg, pos=pos)
+    _report_indentation(ctx, "KSY007")
 
 
 @rule(
@@ -184,10 +179,7 @@ def indentation(ctx: LintContext) -> None:
     fixable=True,
 )
 def sequence_indent(ctx: LintContext) -> None:
-    for issue in indentation_issues(ctx):
-        if issue[0] == "KSY008":
-            _, msg, pos = issue
-            ctx.report(msg, pos=pos)
+    _report_indentation(ctx, "KSY008")
 
 
 @rule(
@@ -199,10 +191,7 @@ def sequence_indent(ctx: LintContext) -> None:
     fixable=True,
 )
 def seq_map_first_key(ctx: LintContext) -> None:
-    for issue in indentation_issues(ctx):
-        if issue[0] == "KSY009":
-            _, msg, pos = issue
-            ctx.report(msg, pos=pos)
+    _report_indentation(ctx, "KSY009")
 
 
 def indentation_issues(ctx: LintContext) -> list[tuple[str, str, Pos]]:
@@ -247,7 +236,7 @@ def _check(ctx: LintContext, node: Node, out: list) -> None:
                             (
                                 "KSY008",
                                 f"sequence under `{k.raw}` must be indented by 2 spaces (`- ` at column {kcol + 3})",
-                                Pos(dline, dcol, 0),
+                                Pos(dline, dcol),
                             )
                         )
                     elif dcol != kcol + 2:
@@ -255,17 +244,17 @@ def _check(ctx: LintContext, node: Node, out: list) -> None:
                             (
                                 "KSY007",
                                 f"expected sequence indentation of {kcol + 2} spaces, found {dcol}",
-                                Pos(dline, dcol, 0),
+                                Pos(dline, dcol),
                             )
                         )
             elif v.kind == SCALAR and v.style in ("|", ">"):
-                ind = _block_scalar_indent(ctx, v)
-                if ind is not None and ind != kcol + 2 and not _has_indent_indicator(ctx, v):
+                ind = doc.block_scalar_indent(v)
+                if ind is not None and ind != kcol + 2:
                     out.append(
                         (
                             "KSY007",
                             f"block scalar content should be indented by {kcol + 2} spaces, found {ind}",
-                            Pos(v.start.line + 1, ind, 0),
+                            Pos(v.start.line + 1, ind),
                         )
                     )
             _check(ctx, v, out)
@@ -282,31 +271,14 @@ def _check(ctx: LintContext, node: Node, out: list) -> None:
                         (
                             "KSY009",
                             "put the first key of this map on the `-` line (`- key: value`)",
-                            Pos(dline, dcol, 0),
+                            Pos(dline, dcol),
                         )
                     )
                 elif item.start.col != dcol + 2:
-                    out.append(
-                        ("KSY007", "use exactly one space after `-`", Pos(dline, dcol + 1, 0))
-                    )
+                    out.append(("KSY007", "use exactly one space after `-`", Pos(dline, dcol + 1)))
             elif same and item.start.col != dcol + 2 and item.kind != SEQ:
-                out.append(("KSY007", "use exactly one space after `-`", Pos(dline, dcol + 1, 0)))
+                out.append(("KSY007", "use exactly one space after `-`", Pos(dline, dcol + 1)))
             _check(ctx, item, out)
-
-
-def _block_scalar_indent(ctx: LintContext, v: Node) -> int | None:
-    last = ctx.doc.last_line(v)
-    for i in range(v.start.line + 1, last + 1):
-        ln = ctx.lines[i]
-        if ln.strip():
-            return len(ln) - len(ln.lstrip(" "))
-    return None
-
-
-def _has_indent_indicator(ctx: LintContext, v: Node) -> bool:
-    ln = ctx.lines[v.start.line][v.start.col :]
-    head = ln.split("#", 1)[0].strip()
-    return any(c.isdigit() for c in head)
 
 
 @rule(

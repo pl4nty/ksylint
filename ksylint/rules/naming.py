@@ -8,9 +8,14 @@ from collections.abc import Iterator
 from .. import specs
 from ..linter import LintContext
 from ..registry import rule
+from ..specs import IDENT_RE
 from ..yamldoc import Node
 
-IDENT_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+_ID_KINDS = {
+    specs.ATTR: "attribute id",
+    specs.PARAM: "parameter id",
+    specs.ENUM_VALUE: "enum value id",
+}
 
 
 def _identifiers(ctx: LintContext) -> Iterator[tuple[str, Node]]:
@@ -32,17 +37,10 @@ def _identifiers(ctx: LintContext) -> Iterator[tuple[str, Node]]:
                 if sec is not None and sec.is_map:
                     for k, _ in sec.items:
                         yield what, k
-        elif spec.kind in (specs.ATTR, specs.PARAM, specs.ENUM_VALUE):
+        elif spec.kind in _ID_KINDS:
             n = node.get("id")
             if n is not None and n.is_str:
-                yield (
-                    {
-                        "attr": "attribute id",
-                        "param": "parameter id",
-                        "enum-value": "enum value id",
-                    }[spec.kind],
-                    n,
-                )
+                yield _ID_KINDS[spec.kind], n
         elif spec.kind == specs.ENUM:
             for _k, v in node.items:
                 if v.is_str:

@@ -27,7 +27,7 @@ from .config import Config
 from .linter import decode
 from .rules.order import sorted_positions
 from .rules.schema import encoding_fixes
-from .yamldoc import MAP, SCALAR, SEQ, Node, YamlDocument
+from .yamldoc import MAP, SCALAR, SEQ, Node, YamlDocument, indent
 
 
 class _Abort(Exception):
@@ -153,20 +153,11 @@ def _fix_indentation(text: str) -> Optional[str]:
         elif v.kind == SEQ and not v.flow and v.items:
             fix_seq(v, kexp + 2)
         elif v.kind == SCALAR and v.style in ("|", ">"):
-            head = lines[v.start.line][v.start.col :].split("#", 1)[0]
-            if any(c.isdigit() for c in head):
-                return  # explicit indentation indicator: leave alone
-            last = doc.last_line(v)
-            ind = None
-            for i in range(v.start.line + 1, last + 1):
-                if lines[i].strip():
-                    ind = len(lines[i]) - len(lines[i].lstrip(" "))
-                    break
+            ind = doc.block_scalar_indent(v)
             if ind is None:
-                return
-            s = kexp + 2 - ind
-            for i in range(v.start.line + 1, last + 1):
-                shift[i] = s
+                return  # empty, or explicit indentation indicator: leave alone
+            for i in range(v.start.line + 1, doc.last_line(v) + 1):
+                shift[i] = kexp + 2 - ind
                 content_lines.add(i)
 
     def fix_map(m: Node, exp: int, first_on_dash: bool) -> None:
@@ -224,9 +215,7 @@ def _fix_indentation(text: str) -> Optional[str]:
         if _is_comment(lines, i, protected):
             if nxt is not None:
                 shift[i] = (
-                    shift[nxt]
-                    if nxt not in rewrite
-                    else rewrite[nxt][0] - (len(lines[nxt]) - len(lines[nxt].lstrip(" ")))
+                    shift[nxt] if nxt not in rewrite else rewrite[nxt][0] - indent(lines[nxt])
                 )
         else:
             nxt = i
@@ -245,8 +234,7 @@ def _fix_indentation(text: str) -> Optional[str]:
         elif s > 0:
             out.append(" " * s + ln)
         else:
-            lead = len(ln) - len(ln.lstrip(" "))
-            if lead < -s:
+            if indent(ln) < -s:
                 if _is_comment(lines, i, protected):
                     out.append(ln.lstrip(" "))
                     continue
@@ -336,7 +324,7 @@ def _reorder_tasks(
             rid = rule_for[spec.kind]
             if not enabled(rid):
                 continue
-            perm = sorted_positions(node, specs.order_of(spec.kind))
+            perm = sorted_positions(node, specs.ORDERS[spec.kind])
         elif spec.kind == specs.XREF:
             rid = "KSY207"
             if not enabled(rid):

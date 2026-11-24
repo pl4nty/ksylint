@@ -11,7 +11,7 @@ import yaml
 from .. import specs
 from ..linter import LintContext
 from ..registry import rule
-from ..yamldoc import Node, Pos
+from ..yamldoc import Node, Pos, indent
 
 DOC_KINDS = (specs.TYPE, specs.ATTR, specs.INSTANCE, specs.PARAM, specs.ENUM_VALUE)
 _INDICATORS = set("-?:,[]{}#&*!|>'\"%@`")
@@ -57,7 +57,7 @@ def doc_single_line(ctx: LintContext) -> None:
         if n.style == "|":
             if plain_ok(n.value.strip()):
                 ctx.report("single-line doc should be a plain scalar, not a `|` block", n)
-        elif n.style in ("'", '"') and n.start.line == _end_line(ctx, n) and plain_ok(n.value):
+        elif n.style in ("'", '"') and n.start.line == ctx.doc.last_line(n) and plain_ok(n.value):
             ctx.report("single-line doc should not be quoted", n)
 
 
@@ -76,12 +76,8 @@ def doc_multi_line(ctx: LintContext) -> None:
             ctx.report(
                 "use a literal block (`|`) instead of a folded block (`>`) for multi-line docs", n
             )
-        elif _is_multiline_content(n) or n.start.line != _end_line(ctx, n):
+        elif _is_multiline_content(n) or n.start.line != ctx.doc.last_line(n):
             ctx.report("multi-line doc should use a literal block scalar (`doc: |`)", n)
-
-
-def _end_line(ctx: LintContext, n: Node) -> int:
-    return ctx.doc.last_line(n)
 
 
 @rule(
@@ -103,13 +99,13 @@ def doc_line_length(ctx: LintContext) -> None:
             nonblank = [ln for ln in content if ln.strip()]
             if not nonblank:
                 continue
-            ind = min(len(ln) - len(ln.lstrip(" ")) for ln in nonblank)
+            ind = min(map(indent, nonblank))
             for off, ln in enumerate(content):
                 text = ln[ind:]
                 if len(text) > limit and _wrappable(text, limit):
                     ctx.report(
                         f"doc line is {len(text)} characters long (limit {limit})",
-                        pos=Pos(n.start.line + 1 + off, ind + limit, 0),
+                        pos=Pos(n.start.line + 1 + off, ind + limit),
                         path=n.ptr,
                     )
                     break
