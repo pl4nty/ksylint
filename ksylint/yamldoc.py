@@ -30,6 +30,28 @@ _KINDS = {yaml.MappingNode: MAP, yaml.SequenceNode: SEQ, yaml.ScalarNode: SCALAR
 _ODD_BREAK_RE = re.compile("\r(?!\n)|[\x85\u2028\u2029]")
 
 
+class _AliasNode(yaml.Node):
+    """An alias (``*name``) with its own position. PyYAML's composer
+    returns the anchored node itself, so an alias would otherwise appear to
+    be located at its anchor."""
+
+    id = "alias"
+
+    def __init__(self, target: yaml.Node, start_mark: Any, end_mark: Any) -> None:
+        super().__init__(target.tag, target.value, start_mark, end_mark)
+        self.target = target
+
+
+class _Loader(yaml.SafeLoader):
+    def compose_node(self, parent: Any, index: Any) -> Any:
+        if self.check_event(yaml.AliasEvent):
+            event = self.peek_event()
+            if event.anchor in self.anchors:
+                self.get_event()
+                return _AliasNode(self.anchors[event.anchor], event.start_mark, event.end_mark)
+        return super().compose_node(parent, index)
+
+
 @dataclass(frozen=True)
 class Pos:
     """0-based source position. Lines are separated by ``\n`` only (see
@@ -159,6 +181,7 @@ class YamlDocument:
         self.error_pos: Optional[Pos] = None
         self.error_message = ""
         self._constructor = SafeConstructor()
+        self._building: set[int] = set()
         self._parse()
 
     def pos(self, index: int) -> Pos:
@@ -175,7 +198,7 @@ class YamlDocument:
     def _parse(self) -> None:
         loader = None
         try:
-            loader = yaml.SafeLoader(self.text)
+            loader = _Loader(self.text)
             raw_root = None
             while loader.check_node():
                 n = loader.get_node()
@@ -210,6 +233,23 @@ class YamlDocument:
             c.recursive_objects.clear()
 
     def _build(self, raw: yaml.Node, path: tuple, ptr: str) -> Node:
+        if isinstance(raw, _AliasNode):
+            # A leaf at the alias's position whose value is the anchored data.
+            node = Node(SCALAR, self.pos(raw.start_mark.index), self.pos(raw.end_mark.index))
+            node.path, node.ptr = path, ptr
+            node.raw = self.text[node.start.index : node.end.index]
+            if id(raw.target) in self._building:
+                node.value = None  # recursive alias
+            else:
+                node.value = self._build(raw.target, path, ptr).to_data()
+            return node
+        self._building.add(id(raw))
+        try:
+            return self._build_node(raw, path, ptr)
+        finally:
+            self._building.discard(id(raw))
+
+    def _build_node(self, raw: yaml.Node, path: tuple, ptr: str) -> Node:
         node = Node(_KINDS[type(raw)], self.pos(raw.start_mark.index), self.pos(raw.end_mark.index))
         node.path = path
         node.ptr = ptr
@@ -268,6 +308,14 @@ class YamlDocument:
             if node is not None:
                 return node
         return self.root
+
+    def line_start(self, line: int) -> int:
+        """Character offset of the start of a 0-based line."""
+        return self._line_starts[line]
+
+    def line_end(self, line: int) -> int:
+        """Character offset of the end of a 0-based line (before its break)."""
+        return self._line_starts[line] + len(self.lines[line])
 
     def line_starts_at(self, pos: Pos) -> bool:
         """True if only whitespace precedes ``pos`` on its line."""

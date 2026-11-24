@@ -132,3 +132,12 @@ def test_severity_and_option_keys_are_selectors():
     long = GOOD.replace("seq:", "doc: " + "word " * 20 + "\nseq:")
     cfg = Config(rule_options={"ksy402": {"max-length": 120}})
     assert ksylint.lint_text(long, "good.ksy", config=cfg) == []
+
+
+def test_alias_has_its_own_position():
+    from ksylint.yamldoc import YamlDocument
+
+    doc = YamlDocument("a:\n  - &x 1\nb:\n  - *x\nc: &r [*r]\n")
+    alias = doc.find(["b", 0])
+    assert (alias.start.line, alias.start.col, alias.raw) == (3, 4, "*x")
+    assert doc.data() == {"a": [1], "b": [1], "c": [None]}
