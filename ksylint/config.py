@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -75,15 +74,19 @@ class Config:
         return [r for r in rules if r.id in enabled]
 
     def severity_of(self, r: Rule) -> Severity:
-        for key in (r.id, r.name):
-            if key in self.severity:
-                return Severity.parse(self.severity[key])
-        return r.severity
+        """Severity of ``r``; the most specific matching selector wins."""
+        best: Optional[tuple[int, str]] = None
+        for selector, severity in self.severity.items():
+            matched = _resolve(selector)
+            if r in matched and (best is None or len(matched) < best[0]):
+                best = (len(matched), severity)
+        return Severity.parse(best[1]) if best else r.severity
 
     def options_for(self, r: Rule) -> dict[str, Any]:
         out = dict(r.options)
-        for key in (r.id, r.name):
-            out.update(self.rule_options.get(key, {}))
+        for key, options in self.rule_options.items():
+            if _rule(key) is r:
+                out.update(options)
         return out
 
     def validate(self) -> None:
@@ -93,11 +96,18 @@ class Config:
             _resolve(k)
             Severity.parse(v)
         Severity.parse(self.fail_on)
-        for k in self.rule_options:
-            try:
-                get_rule(k)
-            except KeyError:
-                raise ConfigError(f"unknown rule {k!r} in rule options") from None
+        for k, options in self.rule_options.items():
+            r = _rule(k)
+            if not isinstance(options, dict):
+                raise ConfigError(f"options of rule {k!r} must be a table")
+            for name, value in options.items():
+                if name not in r.options:
+                    raise ConfigError(f"rule {r.id} ({r.name}) has no option {name!r}")
+                expected = type(r.options[name])
+                if type(value) is not expected:
+                    raise ConfigError(
+                        f"option {name!r} of rule {r.id} must be of type {expected.__name__}"
+                    )
 
 
 def _resolve(selector: str) -> list[Rule]:
@@ -107,45 +117,51 @@ def _resolve(selector: str) -> list[Rule]:
         raise ConfigError(f"unknown rule selector {selector!r}") from None
 
 
-_KEYMAP = {
-    "select": "select",
-    "ignore": "ignore",
-    "extend-select": "extend_select",
-    "severity": "severity",
-    "rules": "rule_options",
-    "fail-on": "fail_on",
-    "exclude": "exclude",
-    "compile": "compile",
-    "ksc": "ksc",
-    "ksc-target": "ksc_target",
-    "import-paths": "import_paths",
+def _rule(key: str) -> Rule:
+    try:
+        return get_rule(key)
+    except KeyError:
+        raise ConfigError(f"unknown rule {key!r} in rule options") from None
+
+
+#: Configuration file key -> (Config attribute, type).
+_KEYS: dict[str, tuple[str, type]] = {
+    "select": ("select", list),
+    "ignore": ("ignore", list),
+    "extend-select": ("extend_select", list),
+    "severity": ("severity", dict),
+    "rules": ("rule_options", dict),
+    "fail-on": ("fail_on", str),
+    "exclude": ("exclude", list),
+    "compile": ("compile", bool),
+    "ksc": ("ksc", str),
+    "ksc-target": ("ksc_target", str),
+    "import-paths": ("import_paths", list),
 }
+_TYPE_NAMES = {list: "list of strings", dict: "table", str: "string", bool: "boolean"}
 
 
 def config_from_mapping(data: dict[str, Any], source: Optional[str] = None) -> Config:
+    """Build a validated :class:`Config` from parsed TOML. ``source`` is the
+    path of the file it came from (relative ``import-paths`` resolve against
+    its directory)."""
+    if not isinstance(data, dict):
+        raise ConfigError("configuration must be a table")
     cfg = Config(source=source)
     for k, v in data.items():
-        attr = _KEYMAP.get(k) or _KEYMAP.get(k.replace("_", "-"))
+        attr, typ = _KEYS.get(str(k).replace("_", "-"), (None, None))
         if attr is None:
-            raise ConfigError(
-                f"unknown configuration key {k!r}" + (f" in {source}" if source else "")
-            )
-        if attr in ("select", "ignore", "extend_select", "exclude", "import_paths"):
-            v = _as_list(v, k)
+            raise ConfigError(f"unknown configuration key {k!r}")
+        if typ is list and isinstance(v, str):
+            v = [s.strip() for s in v.split(",") if s.strip()]
+        if not isinstance(v, typ) or (typ is list and not all(isinstance(s, str) for s in v)):
+            raise ConfigError(f"{k} must be a {_TYPE_NAMES[typ]}")
         setattr(cfg, attr, v)
     if source and cfg.import_paths:
         base = Path(source).parent
         cfg.import_paths = [str((base / p).resolve()) for p in cfg.import_paths]
     cfg.validate()
     return cfg
-
-
-def _as_list(v: Any, key: str) -> list[str]:
-    if isinstance(v, str):
-        return [s.strip() for s in v.split(",") if s.strip()]
-    if isinstance(v, Iterable):
-        return [str(s) for s in v]
-    raise ConfigError(f"{key} must be a list of strings")
 
 
 def load_config_file(path: str | os.PathLike) -> Config:
@@ -157,7 +173,10 @@ def load_config_file(path: str | os.PathLike) -> Config:
             raise ConfigError(f"{p}: {e}") from None
     if p.name == "pyproject.toml":
         data = data.get("tool", {}).get("ksylint", {})
-    return config_from_mapping(data, source=str(p))
+    try:
+        return config_from_mapping(data, source=str(p))
+    except ValueError as e:
+        raise ConfigError(f"{p}: {e}") from None
 
 
 def find_config(start: str | os.PathLike | None = None) -> Optional[Path]:

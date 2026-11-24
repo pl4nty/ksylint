@@ -13,8 +13,34 @@ from .registry import Rule
 from .yamldoc import Node, Pos, YamlDocument
 
 _SUPPRESS_RE = re.compile(
-    r"#\s*ksylint:\s*(disable-next-line|disable-file|disable)\s*(?:=\s*([A-Za-z0-9_,\s-]+))?"
+    r"#\s*ksylint:\s*(disable-next-line|disable-file|disable)"
+    r"(?:\s*=\s*([\w-]+(?:\s*,\s*[\w-]+)*))?"
 )
+
+
+def suppressions(lines: list[str]) -> tuple[set[str], dict[int, set[str]]]:
+    """Parse ``# ksylint: disable...`` comments.
+
+    Returns the selectors (upper-cased rule IDs or names, or ``ALL``)
+    disabled for the whole file and per 1-based line.
+    """
+    file_off: set[str] = set()
+    line_off: dict[int, set[str]] = {}
+    for i, ln in enumerate(lines, start=1):
+        m = _SUPPRESS_RE.search(ln) if "ksylint" in ln else None
+        if not m:
+            continue
+        kind, ids = m.groups()
+        selectors = {s.strip().upper() for s in (ids or "ALL").split(",")}
+        if kind == "disable-file":
+            file_off |= selectors
+        else:
+            line_off.setdefault(i + (kind == "disable-next-line"), set()).update(selectors)
+    return file_off, line_off
+
+
+def suppressed(selectors: set[str], rule_id: str, rule_name: str) -> bool:
+    return bool(selectors & {"ALL", rule_id, rule_name.upper()})
 
 
 @dataclass
@@ -58,6 +84,8 @@ class LintContext:
         #: per-lint scratch space shared between rules
         self.cache: dict[str, Any] = {}
         self._rule: Optional[Rule] = None
+        self._severity = Severity.ERROR
+        #: options of the rule that is currently running
         self.options: dict[str, Any] = {}
 
     @functools.cached_property
@@ -100,7 +128,7 @@ class LintContext:
             Diagnostic(
                 rule_id=r.id,
                 rule_name=r.name,
-                severity=severity or self.config.severity_of(r),
+                severity=severity or self._severity,
                 message=message,
                 file=self.display_name,
                 line=line + 1,
@@ -118,34 +146,18 @@ class LintContext:
             if r.needs == "yaml" and self.root is None:
                 continue
             self._rule = r
+            self._severity = self.config.severity_of(r)
             self.options = self.config.options_for(r)
             r.check(self)
         self._rule = None
         return self._suppress(self.diagnostics)
 
     def _suppress(self, diags: list[Diagnostic]) -> list[Diagnostic]:
-        file_off: set[str] = set()
-        line_off: dict[int, set[str]] = {}
-        for i, ln in enumerate(self.lines):
-            if "ksylint" not in ln:
-                continue
-            m = _SUPPRESS_RE.search(ln)
-            if not m:
-                continue
-            ids = {s.strip().upper() for s in (m.group(2) or "ALL").split(",") if s.strip()}
-            kind = m.group(1)
-            if kind == "disable-file":
-                file_off |= ids
-            elif kind == "disable-next-line":
-                line_off.setdefault(i + 2, set()).update(ids)
-            else:
-                line_off.setdefault(i + 1, set()).update(ids)
-
-        def hit(d: Diagnostic, ids: set[str]) -> bool:
-            return "ALL" in ids or d.rule_id in ids or d.rule_name.upper() in ids
-
+        file_off, line_off = suppressions(self.lines)
         return [
-            d for d in diags if not hit(d, file_off) and not hit(d, line_off.get(d.line, set()))
+            d
+            for d in diags
+            if not suppressed(file_off | line_off.get(d.line, set()), d.rule_id, d.rule_name)
         ]
 
 

@@ -105,3 +105,30 @@ def test_line_ending_position():
 def test_reader_error_position():
     d = ksylint.lint_text(GOOD.replace("one", "o\x01e"), "good.ksy")
     assert [(x.rule_id, x.line, x.column) for x in d] == [("KSY005", 6, 10)]
+
+
+def test_suppression_with_trailing_reason():
+    text = GOOD.replace("seq:", "doc: 'Q'  # ksylint: disable=KSY400 quoted on purpose\nseq:")
+    assert ksylint.lint_text(text, "good.ksy") == []
+    text = GOOD.replace("seq:", "doc: 'Q'  # ksylint: disable = KSY401 , doc-single-line\nseq:")
+    assert ksylint.lint_text(text, "good.ksy") == []
+    text = GOOD.replace("seq:", "doc: 'Q'  # ksylint: disable\nseq:")
+    assert ksylint.lint_text(text, "good.ksy") == []
+
+
+def test_severity_and_option_keys_are_selectors():
+    text = GOOD.replace("seq:", "doc: 'Q'\nseq:")
+
+    def severity(**sev):
+        (d,) = ksylint.lint_text(text, "good.ksy", config=Config(severity=sev))
+        return d.severity
+
+    assert severity(ksy400="error") is Severity.ERROR
+    assert severity(KSY4="info") is Severity.INFO
+    # the most specific selector wins, whatever the order
+    assert severity(**{"doc-single-line": "error", "KSY": "info"}) is Severity.ERROR
+    assert severity(**{"ALL": "info", "KSY4": "error"}) is Severity.ERROR
+
+    long = GOOD.replace("seq:", "doc: " + "word " * 20 + "\nseq:")
+    cfg = Config(rule_options={"ksy402": {"max-length": 120}})
+    assert ksylint.lint_text(long, "good.ksy", config=cfg) == []

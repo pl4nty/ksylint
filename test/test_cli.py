@@ -96,6 +96,38 @@ def test_config_dotfile(files, capsys):
     assert main(["."]) == 2
 
 
+@pytest.mark.parametrize(
+    "toml",
+    [
+        "bogus = 1",
+        "select = 5",
+        "select = [1]",
+        'select = ["KSY999"]',
+        'severity = "error"',
+        '[severity]\nKSY999 = "error"',
+        '[severity]\nKSY400 = "fatal"',
+        'fail-on = "fatal"',
+        'compile = "no"',
+        "ksc = 1",
+        "rules = 5",
+        "[rules]\nKSY402 = 3",
+        "[rules.nope]\nx = 1",
+        "[rules.KSY402]\nmax_length = 100",
+        '[rules.KSY402]\nmax-length = "100"',
+        "not toml",
+    ],
+)
+def test_bad_config_is_a_usage_error(files, capsys, toml):
+    (files / ".ksylint.toml").write_text(toml + "\n")
+    assert main(["."]) == 2
+    assert ".ksylint.toml: " in capsys.readouterr().err
+
+
+def test_bad_pyproject_table(files, capsys):
+    (files / "pyproject.toml").write_text('[tool]\nksylint = "x"\n')
+    assert main(["."]) == 2
+
+
 def test_list_rules(capsys):
     assert main(["--list-rules"]) == 0
     out = capsys.readouterr().out
