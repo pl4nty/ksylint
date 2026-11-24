@@ -1,0 +1,67 @@
+name: ksylint
+description: Lint Kaitai Struct .ksy files against the official KSY style guide.
+author: pl4nty
+branding:
+  icon: check-square
+  color: blue
+
+inputs:
+  paths:
+    description: Space-separated files or directories to lint (directories are searched for *.ksy).
+    required: false
+    default: "."
+  args:
+    description: Extra command-line arguments, e.g. `--select KSY0,KSY1 --fail-on error`.
+    required: false
+    default: ""
+  format:
+    description: Output format (github, text, json or sarif). `github` produces inline annotations.
+    required: false
+    default: github
+  sarif-file:
+    description: If set, also write a SARIF report to this path (for github/codeql-action/upload-sarif).
+    required: false
+    default: ""
+  python-version:
+    description: Python version used to run ksylint.
+    required: false
+    default: "3.12"
+  version:
+    description: >-
+      ksylint version to install from PyPI (e.g. `1.0.0`). Empty installs the
+      version of the action itself.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Install ksylint
+      shell: bash
+      env:
+        KSYLINT_VERSION: ${{ inputs.version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        if [ -n "$KSYLINT_VERSION" ]; then
+          python -m pip install --disable-pip-version-check "ksylint==$KSYLINT_VERSION"
+        else
+          python -m pip install --disable-pip-version-check "$ACTION_PATH"
+        fi
+    - name: Run ksylint
+      shell: bash
+      env:
+        KSYLINT_PATHS: ${{ inputs.paths }}
+        KSYLINT_ARGS: ${{ inputs.args }}
+        KSYLINT_FORMAT: ${{ inputs.format }}
+        KSYLINT_SARIF: ${{ inputs.sarif-file }}
+      run: |
+        # shellcheck disable=SC2086
+        status=0
+        if [ -n "$KSYLINT_SARIF" ]; then
+          ksylint --format sarif --exit-zero $KSYLINT_ARGS $KSYLINT_PATHS > "$KSYLINT_SARIF"
+        fi
+        ksylint --format "$KSYLINT_FORMAT" $KSYLINT_ARGS $KSYLINT_PATHS || status=$?
+        exit $status
