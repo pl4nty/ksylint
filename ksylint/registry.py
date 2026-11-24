@@ -8,8 +8,9 @@ decorator; importing :mod:`ksylint.rules` populates :data:`RULES`.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from .diagnostic import Severity
 

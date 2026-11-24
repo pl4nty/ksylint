@@ -36,7 +36,7 @@ pip install ksylint
 pip install git+https://github.com/pl4nty/ksylint
 ```
 
-ksylint needs Python 3.9 or newer.
+ksylint needs Python 3.10 or newer.
 
 ## Usage
 

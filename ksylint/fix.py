@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import copy
 import functools
+import itertools
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Union
+from typing import Any, Optional, Union
 
 import yaml
 
@@ -294,7 +295,7 @@ def _blocks(doc: YamlDocument, anchors: list[_Span], protected: set[int]) -> Opt
                 start -= 1
         out.append([start, b])
         prev_end = b
-    for cur, nxt in zip(out, out[1:]):
+    for cur, nxt in itertools.pairwise(out):
         e = nxt[0] - 1
         if e < cur[1]:
             return None  # entries share a line
@@ -417,7 +418,7 @@ def _fix_reorder(text: str, active: set[str]) -> Optional[_Edit]:
             continue
         dash = None
         if prefix is not None:
-            dash = (prefix, [a - start for (a, _), (start, _) in zip(anchors, blocks)])
+            dash = (prefix, [a - start for (a, _), (start, _) in zip(anchors, blocks, strict=True)])
         _apply_perm(lines, blocks, perm, dash)
         applied.add(rid)
     if not applied:

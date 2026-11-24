@@ -33,7 +33,7 @@ def sorted_positions(node: Node, order: dict[str, int]) -> list[int]:
     slots = [i for i in idx if not specs.free_key(node.items[i][0].value, order)]
     ranked = sorted(slots, key=lambda i: order[node.items[i][0].value])
     out = idx[:]
-    for slot, src in zip(slots, ranked):
+    for slot, src in zip(slots, ranked, strict=True):
         out[slot] = src
     return out
 
