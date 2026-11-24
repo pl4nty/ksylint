@@ -1,3 +1,5 @@
+import pytest
+
 import ksylint
 from ksylint import Config, Severity
 
@@ -81,3 +83,25 @@ def test_yaml11_semantics():
 def test_rule_lookup():
     assert ksylint.get_rule("ksy302").name == "attribute-key-order"
     assert ksylint.get_rule("attribute-key-order").id == "KSY302"
+
+
+@pytest.mark.parametrize("brk", ["\r", "\x85", "\u2028", "\u2029"])
+def test_positions_with_unusual_line_breaks(brk):
+    # PyYAML treats these as line breaks; reported lines must still be
+    # `\n`-based (and a CR-only file must not crash the layout rules).
+    text = GOOD.replace("seq:", f'doc: "a{brk}b"\nseq:') + "    encoding: ascii\n"
+    d = [x for x in ksylint.lint_text(text, "good.ksy") if x.rule_id == "KSY101"]
+    assert [(x.line, x.column) for x in d] == [(9, 15)]
+    assert "encoding: ASCII" in ksylint.fix_text(text, "good.ksy").text
+    ksylint.lint_text(GOOD.replace("\n", brk), "good.ksy")
+    ksylint.fix_text(GOOD.replace("\n", brk), "good.ksy")
+
+
+def test_line_ending_position():
+    d = ksylint.lint_text(GOOD.replace("Good\n", "Good\r\n"), "good.ksy")
+    assert [(x.rule_id, x.line, x.column) for x in d] == [("KSY002", 3, 14)]
+
+
+def test_reader_error_position():
+    d = ksylint.lint_text(GOOD.replace("one", "o\x01e"), "good.ksy")
+    assert [(x.rule_id, x.line, x.column) for x in d] == [("KSY005", 6, 10)]

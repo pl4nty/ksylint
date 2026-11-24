@@ -42,7 +42,6 @@ def line_endings(ctx: LintContext) -> None:
         return
     n_crlf = text.count("\r\n")
     n_cr = text.count("\r") - n_crlf
-    first = text[: text.index("\r")].count("\n")
     kinds = []
     if n_crlf:
         kinds.append(f"{n_crlf} CRLF")
@@ -50,8 +49,7 @@ def line_endings(ctx: LintContext) -> None:
         kinds.append(f"{n_cr} CR")
     ctx.report(
         f"use LF line endings ({' and '.join(kinds)} line ending(s) found)",
-        line=first,
-        col=len(ctx.lines[first]),
+        pos=ctx.doc.pos(text.index("\r")),
     )
 
 
@@ -212,7 +210,7 @@ def indentation_issues(ctx: LintContext) -> list[tuple[str, str, Pos]]:
     if "issues" not in cache:
         out: list[tuple[str, str, Pos]] = []
         root = ctx.root
-        if root is not None and root.is_block:
+        if root is not None and root.is_block and not ctx.doc.odd_breaks:
             if root.start.col != 0 and root.is_map:
                 out.append(
                     (

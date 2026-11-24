@@ -9,6 +9,8 @@ surgical, line-based edits instead of re-serialising the whole document.
 
 from __future__ import annotations
 
+import bisect
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -20,18 +22,18 @@ MAP = "map"
 SEQ = "seq"
 SCALAR = "scalar"
 
+#: Line breaks (to YAML) that do not end a line in :attr:`YamlDocument.lines`.
+_ODD_BREAK_RE = re.compile("\r(?!\n)|[\x85\u2028\u2029]")
+
 
 @dataclass(frozen=True)
 class Pos:
-    """0-based source position."""
+    """0-based source position. Lines are separated by ``\n`` only (see
+    :meth:`YamlDocument.pos`); ``index`` is the character offset."""
 
     line: int
     col: int
-    index: int
-
-    @classmethod
-    def of(cls, mark: Any) -> Pos:
-        return cls(mark.line, mark.column, mark.index)
+    index: int = 0
 
 
 class Node:
@@ -163,20 +165,38 @@ class YamlDocument:
 
     def __init__(self, text: str) -> None:
         self.text = text
-        self.lines: list[str] = [ln.rstrip("\r") for ln in text.split("\n")]
+        raw_lines = text.split("\n")
+        self.lines: list[str] = [ln.rstrip("\r") for ln in raw_lines]
+        self._line_starts = [0]
+        for ln in raw_lines[:-1]:
+            self._line_starts.append(self._line_starts[-1] + len(ln) + 1)
+        #: True if YAML's idea of a line differs from :attr:`lines`, in
+        #: which case column-based layout checks and fixes are meaningless.
+        self.odd_breaks = _ODD_BREAK_RE.search(text) is not None
         self.root: Optional[Node] = None
         self.n_documents = 0
-        self.error: Optional[yaml.MarkedYAMLError] = None
+        self.error: Optional[yaml.YAMLError] = None
         self.error_pos: Optional[Pos] = None
         self.error_message = ""
         self.nodes_by_ptr: dict[str, Node] = {}
         self._constructor = SafeConstructor()
         self._parse()
 
+    def pos(self, index: int) -> Pos:
+        """Position of a character offset.
+
+        PyYAML's own line/column counters are not used: they also count a
+        lone CR, NEL, LS and PS as line breaks (and skip a BOM), which does
+        not match :attr:`lines`, editors or ``git diff``.
+        """
+        line = bisect.bisect_right(self._line_starts, index) - 1
+        return Pos(line, index - self._line_starts[line], index)
+
     # -- parsing -----------------------------------------------------------
     def _parse(self) -> None:
-        loader = yaml.SafeLoader(self.text)
+        loader = None
         try:
+            loader = yaml.SafeLoader(self.text)
             raw_root = None
             while loader.check_node():
                 n = loader.get_node()
@@ -186,16 +206,19 @@ class YamlDocument:
             if raw_root is not None:
                 self.root = self._build(raw_root, (), "", None)
         except yaml.YAMLError as e:
-            self.error = e  # type: ignore[assignment]
+            self.error = e
             mark = getattr(e, "problem_mark", None) or getattr(e, "context_mark", None)
-            if mark is not None:
-                self.error_pos = Pos.of(mark)
-            problem = getattr(e, "problem", None) or str(e)
+            # ReaderError (e.g. a control character) has a bare `position`.
+            index = mark.index if mark is not None else getattr(e, "position", None)
+            if isinstance(index, int):
+                self.error_pos = self.pos(index)
+            problem = getattr(e, "problem", None) or getattr(e, "reason", None) or str(e)
             context = getattr(e, "context", None)
             self.error_message = f"{context}: {problem}" if context else str(problem)
             self.root = None
         finally:
-            loader.dispose()
+            if loader is not None:
+                loader.dispose()
 
     def _construct_scalar(self, raw: yaml.Node) -> Any:
         c = self._constructor
@@ -207,15 +230,18 @@ class YamlDocument:
             c.constructed_objects.clear()
             c.recursive_objects.clear()
 
+    def _span(self, raw: yaml.Node) -> tuple[Pos, Pos]:
+        return self.pos(raw.start_mark.index), self.pos(raw.end_mark.index)
+
     def _build(self, raw: yaml.Node, path: tuple, ptr: str, parent: Optional[Node]) -> Node:
         if isinstance(raw, yaml.MappingNode):
-            node = Node(MAP, Pos.of(raw.start_mark), Pos.of(raw.end_mark))
+            node = Node(MAP, *self._span(raw))
             node.flow = bool(raw.flow_style)
         elif isinstance(raw, yaml.SequenceNode):
-            node = Node(SEQ, Pos.of(raw.start_mark), Pos.of(raw.end_mark))
+            node = Node(SEQ, *self._span(raw))
             node.flow = bool(raw.flow_style)
         else:
-            node = Node(SCALAR, Pos.of(raw.start_mark), Pos.of(raw.end_mark))
+            node = Node(SCALAR, *self._span(raw))
             node.style = raw.style
             node.raw = raw.value
             node.value = self._construct_scalar(raw)
@@ -227,7 +253,7 @@ class YamlDocument:
         if node.kind == MAP:
             for kraw, vraw in raw.value:
                 if isinstance(kraw, yaml.ScalarNode):
-                    key = Node(SCALAR, Pos.of(kraw.start_mark), Pos.of(kraw.end_mark))
+                    key = Node(SCALAR, *self._span(kraw))
                     key.style = kraw.style
                     key.raw = kraw.value
                     key.value = self._construct_scalar(kraw)

@@ -134,6 +134,8 @@ def _fix_indentation(text: str) -> Optional[str]:
     root = doc.root
     if not doc.ok or root is None or root.kind != MAP or root.flow or doc.n_documents != 1:
         return None
+    if doc.odd_breaks:
+        return None
     lines = doc.lines
     n = len(lines)
     shift: list[Optional[int]] = [None] * n
@@ -367,6 +369,8 @@ def _fix_reorder(text: str, enabled: Callable[[str], bool]) -> tuple[Optional[st
     for _ in range(8):
         doc = YamlDocument(text)
         if not doc.ok or doc.root is None or doc.root.kind != MAP or doc.n_documents != 1:
+            return None, applied
+        if doc.odd_breaks:
             return None, applied
         tasks = _reorder_tasks(doc, enabled)
         if not tasks:
