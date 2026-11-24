@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from ..linter import LintContext
 from ..registry import rule
-from ..yamldoc import MAP, SCALAR, SEQ, Node, Pos
+from ..yamldoc import MAP, SCALAR, SEQ, Node, Pos, YamlDocument
 
 
 @rule(
@@ -77,6 +79,42 @@ def trailing_newline(ctx: LintContext) -> None:
         ctx.report(f"{extra} blank line(s) at end of file", line=line, col=0)
 
 
+DIRECTIVE = "directive"
+#: The first `---`, alone on its line (or with a comment): removable.
+START = "start"
+#: The first `---`, with content on the same line (`--- foo: 1`).
+START_INLINE = "start-inline"
+#: A further `---`: the file has several documents.
+EXTRA_START = "extra-start"
+END = "end"
+
+
+def document_markers(lines: list[str]) -> Iterator[tuple[int, str]]:
+    """Yield ``(line index, kind)`` for YAML directives and document
+    markers. Stops at the second ``---``."""
+    in_header = True
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if in_header and (s == "" or s.startswith("#")):
+            continue
+        if in_header and ln.startswith("%"):
+            yield i, DIRECTIVE
+            continue
+        marker, rest = ln[:3], ln[3:]
+        if rest[:1] not in ("", " ", "\t"):
+            marker = ""
+        if marker == "---":
+            if not in_header:
+                yield i, EXTRA_START
+                return
+            in_header = False
+            yield i, START if rest.strip()[:1] in ("", "#") else START_INLINE
+        elif marker == "...":
+            yield i, END
+        else:
+            in_header = False
+
+
 @rule(
     "KSY004",
     "single-document",
@@ -87,29 +125,22 @@ def trailing_newline(ctx: LintContext) -> None:
     needs="text",
 )
 def single_document(ctx: LintContext) -> None:
-    doc = ctx.doc
-    multi = doc.n_documents > 1
-    in_header = True
-    for i, ln in enumerate(ctx.lines):
-        s = ln.strip()
-        if in_header and (s == "" or s.startswith("#")):
-            continue
-        if in_header and ln.startswith("%"):
-            ctx.report(f"remove the `{ln.split()[0]}` directive", line=i, col=0, fixable=not multi)
-            continue
-        if ln == "---" or ln.startswith("--- ") or ln.startswith("---\t"):
-            if in_header:
-                ctx.report(
-                    "remove the `---` document start marker", line=i, col=0, fixable=not multi
-                )
-                in_header = False
-                continue
+    single = ctx.doc.n_documents <= 1
+    for i, kind in document_markers(ctx.lines):
+        if kind == DIRECTIVE:
+            directive = ctx.lines[i].split()[0]
+            ctx.report(f"remove the `{directive}` directive", line=i, col=0, fixable=single)
+        elif kind in (START, START_INLINE):
+            ctx.report(
+                "remove the `---` document start marker",
+                line=i,
+                col=0,
+                fixable=single and kind == START,
+            )
+        elif kind == EXTRA_START:
             ctx.report("file contains multiple YAML documents", line=i, col=0, fixable=False)
-            return
-        if ln == "..." or ln.startswith("... "):
+        else:
             ctx.report("remove the `...` document end marker", line=i, col=0, fixable=False)
-            continue
-        in_header = False
 
 
 @rule(
@@ -153,7 +184,9 @@ def duplicate_key(ctx: LintContext) -> None:
 
 
 def _report_indentation(ctx: LintContext, rule_id: str) -> None:
-    for rid, msg, pos in indentation_issues(ctx):
+    if "indentation" not in ctx.cache:
+        ctx.cache["indentation"] = indentation_issues(ctx.doc)
+    for rid, msg, pos in ctx.cache["indentation"]:
         if rid == rule_id:
             ctx.report(msg, pos=pos)
 
@@ -194,27 +227,24 @@ def seq_map_first_key(ctx: LintContext) -> None:
     _report_indentation(ctx, "KSY009")
 
 
-def indentation_issues(ctx: LintContext) -> list[tuple[str, str, Pos]]:
-    cache = ctx.cache.setdefault("indent", {})
-    if "issues" not in cache:
-        out: list[tuple[str, str, Pos]] = []
-        root = ctx.root
-        if root is not None and root.is_block and not ctx.doc.odd_breaks:
-            if root.start.col != 0 and root.is_map:
-                out.append(
-                    (
-                        "KSY007",
-                        f"top-level keys must start at column 1, not {root.start.col + 1}",
-                        root.start,
-                    )
+def indentation_issues(doc: YamlDocument) -> list[tuple[str, str, Pos]]:
+    """``(rule ID, message, position)`` for every KSY007/008/009 problem."""
+    out: list[tuple[str, str, Pos]] = []
+    root = doc.root
+    if root is not None and root.is_block and not doc.odd_breaks:
+        if root.start.col != 0 and root.is_map:
+            out.append(
+                (
+                    "KSY007",
+                    f"top-level keys must start at column 1, not {root.start.col + 1}",
+                    root.start,
                 )
-            _check(ctx, root, out)
-        cache["issues"] = out
-    return cache["issues"]
+            )
+        _check(doc, root, out)
+    return out
 
 
-def _check(ctx: LintContext, node: Node, out: list) -> None:
-    doc = ctx.doc
+def _check(doc: YamlDocument, node: Node, out: list) -> None:
     if node.kind == MAP and not node.flow:
         for k, v in node.items:
             kcol = k.start.col
@@ -257,12 +287,12 @@ def _check(ctx: LintContext, node: Node, out: list) -> None:
                             Pos(v.start.line + 1, ind),
                         )
                     )
-            _check(ctx, v, out)
+            _check(doc, v, out)
     elif node.kind == SEQ and not node.flow:
         for item in node.items:
             d = doc.dash_of(item)
             if d is None:
-                _check(ctx, item, out)
+                _check(doc, item, out)
                 continue
             dline, dcol, same = d
             if item.kind == MAP and not item.flow:
@@ -278,7 +308,7 @@ def _check(ctx: LintContext, node: Node, out: list) -> None:
                     out.append(("KSY007", "use exactly one space after `-`", Pos(dline, dcol + 1)))
             elif same and item.start.col != dcol + 2 and item.kind != SEQ:
                 out.append(("KSY007", "use exactly one space after `-`", Pos(dline, dcol + 1)))
-            _check(ctx, item, out)
+            _check(doc, item, out)
 
 
 @rule(

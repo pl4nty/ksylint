@@ -93,6 +93,11 @@ alignment and blank lines are left alone. After every step the file is
 re-parsed and the loaded data is compared with the data before the step; a
 step that would change anything else is discarded. Fixing is idempotent.
 
+Only enabled rules are fixed: a rule that is ignored, or disabled with a
+`# ksylint: disable-file` comment, is left alone (the three indentation rules
+`KSY007`–`KSY009` are fixed together or not at all). Line-level `disable`
+comments only silence the diagnostic.
+
 ## Configuration
 
 ksylint reads `.ksylint.toml` (top-level keys) or the `[tool.ksylint]` table
@@ -109,7 +114,7 @@ ksc = "kaitai-struct-compiler"
 ksc-target = "python"
 import-paths = ["."]           # for --compile; default: the repository root
 
-[tool.ksylint.severity]
+[tool.ksylint.severity]        # keys: rule IDs, ID prefixes or rule names
 KSY402 = "info"
 
 [tool.ksylint.rules.doc-line-length]
@@ -124,6 +129,9 @@ doc: "Quoted on purpose"  # ksylint: disable=KSY400
 doc: A very long line ...
 # ksylint: disable-file=KSY600,KSY601
 ```
+
+The rule list is comma-separated (IDs or names; without a list, all rules are
+disabled) and may be followed by an explanation.
 
 ## Rules
 
