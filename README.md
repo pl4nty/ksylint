@@ -4,7 +4,7 @@
 <a href="https://doc.kaitai.io/ksy_style_guide.html">official KSY style guide</a>.</p>
 
 <p align="center">
- <a href="https://github.com/pl4nty/ksylint/actions/workflows/ci.yml"><img src="https://github.com/pl4nty/ksylint/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+ <a href="https://github.com/pl4nty/ksylint/actions/workflows/pythonpackage.yml"><img src="https://github.com/pl4nty/ksylint/actions/workflows/pythonpackage.yml/badge.svg" alt="CI"></a>
 </p>
 
 ksylint checks `.ksy` files for
@@ -299,7 +299,6 @@ pip install -e ".[dev]"
 pytest                                   # tests
 ruff check . && ruff format --check .    # lint
 python scripts/gen_rule_table.py         # refresh the rule table above
-python scripts/update_schema.py          # refresh the vendored KSY schema
 KSYLINT_FORMATS_DIR=../kaitai_struct_formats pytest test/test_integration.py
 ```
 
@@ -308,8 +307,9 @@ Rules live in `ksylint/rules/`; each is a function registered with
 `test/fixtures/rules/<ID>/invalid/*.ksy` fixture (and ideally a `valid/` one)
 for every new rule.
 
-The vendored schema and its provenance are described in
-[`ksylint/data/README.md`](ksylint/data/README.md).
+`ksylint/data/ksy_schema.json` is a copy of the official KSY JSON Schema;
+update it by hand. Load-time corrections live in `SCHEMA_PATCHES` in
+`ksylint/schema.py`.
 
 ## License
 
