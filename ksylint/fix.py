@@ -33,7 +33,7 @@ from .rules.order import sorted_positions
 from .rules.schema import encoding_fixes
 from .yamldoc import MAP, SCALAR, SEQ, Node, YamlDocument, indent
 
-_BOM = "﻿"
+_BOM = "\ufeff"
 _MAX_ROUNDS = 4
 
 

@@ -54,17 +54,16 @@ class Source:
 
 
 def decode(data: Union[str, bytes], filename: Optional[str] = None) -> Source:
-    if isinstance(data, str):
-        bom = data.startswith("﻿")
-        return Source(data[1:] if bom else data, filename, bom=bom)
+    """Decode file contents and strip a byte order mark."""
     err = None
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError as e:
-        err = (data[: e.start].count(b"\n"), e.start, e.reason)
-        text = data.decode("utf-8", errors="replace")
-    bom = text.startswith("﻿")
-    return Source(text[1:] if bom else text, filename, utf8_error=err, bom=bom)
+    if isinstance(data, bytes):
+        try:
+            data = data.decode("utf-8")
+        except UnicodeDecodeError as e:
+            err = (data[: e.start].count(b"\n"), e.start, e.reason)
+            data = data.decode("utf-8", errors="replace")
+    bom = data.startswith("\ufeff")
+    return Source(data[1:] if bom else data, filename, utf8_error=err, bom=bom)
 
 
 class LintContext:
