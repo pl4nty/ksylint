@@ -44,6 +44,9 @@ Source = "https://github.com/pl4nty/ksylint"
 Issues = "https://github.com/pl4nty/ksylint/issues"
 "Style guide" = "https://doc.kaitai.io/ksy_style_guide.html"
 
+[project.scripts]
+ksylint = "ksylint.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["ksylint"]
 
